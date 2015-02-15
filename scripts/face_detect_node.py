@@ -33,6 +33,7 @@ import Image
 import numpy as np
 import rospy
 import sensor_msgs.msg
+import sys
 
 face_cascade_path = '/usr/share/opencv/haarcascades/haarcascade_frontalface_default.xml'
 eye_cascade_path = '/usr/share/opencv/haarcascades/haarcascade_eye.xml'
@@ -46,11 +47,11 @@ class FaceDetectNode(object):
 	self.face_cascade = cv2.CascadeClassifier(face_cascade_path)
 	self.eye_cascade = cv2.CascadeClassifier(eye_cascade_path)
 
+	myargs = rospy.myargv(sys.argv) # process ROS args and return the rest
 	parser = argparse.ArgumentParser(description="Detect faces in a ROS image stream")
 	parser.add_argument("-o", "--output", dest="output_directory", metavar="DIRECTORY", help="write cropped faces to directory")
 	parser.add_argument("--show", help="show image window", action="store_true")
-	parser.add_argument("ros_params", help="additional ROS parameters")
-	self.options = parser.parse_args()
+	self.options = parser.parse_args(myargs[1:])
 
 	input_topic = rospy.get_param('~in', "/vision/image")
 	rospy.loginfo('Parameter %s has value %s', rospy.resolve_name('~in'), input_topic)
