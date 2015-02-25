@@ -3,19 +3,22 @@
 # This is the Learn Face Node.
 #
 # Subscribes To:
-# - /detected_face
+# - /unrecognized_face
 #
 # Publishes To:
-# - 
+# - /learned_face
 #
-# Analyze images of human faces detected in a camera video stream to
-# build a model that distinguishes the faces of individuals.
+# Group faces that occur close in time and proximity under the
+# assumption that these constraints identify images that are
+# related to a single person.  Record the images in a file structure
+# which can be used for recognition.
 #
 # Copyright 2015, IEEE ENCS Humanoid Robot Project
 #===================================================================
 
 from __future__ import division
 from vision.msg import DetectedFace
+from vision.msg import LearnedFace
 from cv_bridge import CvBridge, CvBridgeError
 import argparse
 import atexit
@@ -34,6 +37,16 @@ import sys
 ### publish message to notify recognizer of a new encounter
 
 
+def get_pixelprint(cv_crop, bits_per_pixel=50):
+    cw, ch = cv_crop.shape[1::-1] # note image shape is h, w, d; reverse (h, w)->(w, h)
+    bits = []
+    for px in xrange(cw):
+	for py in xrange(ch):
+	    i = int(max(1, min(int(cv_crop[px][py]), 250) / 5))  # Note:  5 * 50 = 250
+	    bits.append((px*ch + py)*bits_per_pixel + i)
+    return bits
+
+
 # The upper limit for the encounter id.  These are assigned randomly,
 # so two unrelated encounters may get the same id.  It is expected that
 # an individual will have several encounters during face learning, and 
@@ -49,6 +62,8 @@ class FaceEncounter(object):
 	self.save_index = 0
 	if face:
 	    self.append(face)
+	self.learned_faces = []
+	self.bits_cache = {}
 
 
     def __len__(self):
@@ -91,20 +106,27 @@ class FaceEncounter(object):
 	The faces are stored as images within the folder.
 	'''
 	global facedb_path, bridge
-	encounter_path = os.path.join(facedb_path, str(self.id))
 	if self.save_index == 0:
+	    encounter_path = os.path.join(facedb_path, str(self.id))
 	    mkdir(encounter_path)
 	for i, face in enumerate(self.faces[self.save_index:]):
 	    try:
-		frame_id = face.header.frame_id.replace("/", "_")
-		name = str(face.header.stamp) + frame_id + "_" + str(self.save_index + i)
-		image_name = os.path.join(encounter_path, name + ".png")
 		cv_image = bridge.imgmsg_to_cv2(face.image)
-		cv2.imwrite(image_name, cv_image)
+		cv2.imwrite(self.get_filepath(self.save_index + i), cv_image)
 		#print "wrote file " + image_name
 	    except CvBridgeError, e:
 		print e
 	self.save_index = len(self.faces)
+
+
+    def get_filepath(self, face_index):
+	global facedb_path
+	face = self.faces[face_index]
+	encounter_path = os.path.join(facedb_path, str(self.id))
+	frame_id = face.header.frame_id.replace("/", "_")
+	name = str(face.header.stamp) + frame_id + "_" + str(face_index)
+	image_name = os.path.join(encounter_path, name + ".png")
+	return image_name
 
 
     def is_expired(self, face):
@@ -118,6 +140,63 @@ class FaceEncounter(object):
 	    return abs((face.header.stamp - prev.header.stamp).to_sec() * 1000) > delta_t_ms
 	else:
 	    return False
+
+
+    def get_learned_faces(self):
+	'''
+	calculates the ensemble average overlap and returns the learned faces
+	'''
+	if len(self.learned_faces) < len(self.faces):
+	    cnt_overlap = len(self.faces) * (len(self.faces) - 1) / 2
+	    max_overlap = 0
+	    avg_overlap = 0
+	    min_overlap = None
+	    for i in xrange(len(self.faces) - 1):
+		for j in xrange(i +  1, len(self.faces)):
+		    o = self.overlap(i, j)
+		    max_overlap = max(max_overlap, o)
+		    avg_overlap += o / cnt_overlap
+		    if min_overlap:
+			min_overlap = min(min_overlap, o)
+		    else:
+			min_overlap = o
+	    for i, face in enumerate(self.faces):
+		learned_face = LearnedFace()
+		learned_face.header = face.header # copy the header
+		learned_face.encounter_id = self.id
+		learned_face.max_overlap = max_overlap
+		learned_face.avg_overlap = int(avg_overlap)
+		learned_face.min_overlap = min_overlap
+		learned_face.filepath = self.get_filepath(i)
+		learned_face.bits = self.get_bits(i)
+		self.learned_faces.append(learned_face)
+	return self.learned_faces
+
+
+    def overlap(self, i, j):
+	return len(self.get_bits(i) & self.get_bits(j))
+
+
+    def get_bits(self, face_index):
+	if face_index in self.bits_cache:
+	    return self.bits_cache[face_index]
+	cv_image = bridge.imgmsg_to_cv2(self.faces[face_index].image)
+	bits = set(get_pixelprint(cv_image))
+	self.bits_cache[face_index] = bits
+	return bits
+
+
+    def close(self):
+	'''
+	writes out the learned faces to the <enc_id>/faces.txt file
+	'''
+	learned_faces = self.get_learned_faces() # lazy load; calculate if necessary
+	encounter_path = os.path.join(facedb_path, str(self.id))
+	faces_txt = os.path.join(encounter_path, "faces.txt")
+	with open(faces_txt, "a") as f:
+	    for i, learned_face in enumerate(learned_faces):
+		f.write("\t".join([learned_face.filepath, str(learned_face.encounter_id), str(learned_face.max_overlap), str(learned_face.avg_overlap), str(learned_face.min_overlap)]) + "\n")
+	print "wrote " + faces_txt
 
 
 class LearnFaceNode(object):
@@ -135,12 +214,18 @@ class LearnFaceNode(object):
 	parser = argparse.ArgumentParser(description="Learn faces in a ROS image stream")
 	self.options = parser.parse_args(myargs[1:])
 
-	input_topic = self.get_param('~in', '/detected_face')
+	input_topic = self.get_param('~in', '/unrecognized_face')
+	output_topic = self.get_param('~out', '/learned_face')
 	delta_xy_px = int(self.get_param('~delta_xy_px', '20'))
 	delta_t_ms = int(self.get_param('~delta_t_ms', '1000'))
 	facedb_path = self.get_param('~facedb', 'facedb')
+
+	# minimum and maximum number of faces per encounter
+	self.min_faces = int(self.get_param('~max_faces', '5'))
+	self.max_faces = int(self.get_param('~max_faces', '10'))
 	
 	face_sub = rospy.Subscriber(input_topic, DetectedFace, self.on_detected_face)
+	self.learn_pub = rospy.Publisher(output_topic, LearnedFace, queue_size=50)
 
 
     def get_param(self, param_name, param_default):
@@ -188,15 +273,27 @@ class LearnFaceNode(object):
 	    for i, encounter in enumerate(encounters_for_frame):
 		# determine if the encounter should be retained in the list
 		if encounter.is_expired(face):
+		    # if encounter expires before reaching max faces publish and close
+		    # it, if it has min faces
+		    if len(encounter) >= self.min_faces:
+			print "publishing EXPIRED encounter " + str(encounter.id)
+			self.publish_encounter(encounter)
+			encounter.close() # write encounter stats to faces.txt
 		    to_remove.append(i)
 	    	# determine if face belongs to the encounter
 		elif encounter.is_related_to(face):
 		    #print "adding face to encounter " + str(encounter.id)
 		    encounter.append(face)
 		    # determine if encounter has 5 faces and write it out
-		    if len(encounter) >= 5:
+		    if len(encounter) >= self.min_faces:
 		    	encounter.save()
-		    face = None
+		    # if encounter reached max size, publish, close, and remove it
+		    if len(encounter) >= self.max_faces:
+			print "publishing MAXED encounter " + str(encounter.id)
+			self.publish_encounter(encounter)
+			encounter.close() # write encounter stats to faces.txt
+			to_remove.append(i)
+		    face = None # indicate face was processed
 		    break
 
 	    if face:
@@ -206,6 +303,13 @@ class LearnFaceNode(object):
 	    # remove expired encounters
 	    for i in reversed(to_remove):
 		del encounters_for_frame[i]
+
+
+    def publish_encounter(self, encounter):
+	learned_faces = encounter.get_learned_faces()
+	for learned_face in learned_faces:
+	    self.learn_pub.publish(learned_face)
+	print "published learned face encounter " + str(encounter.id)
 
 
 def mkdir(path):

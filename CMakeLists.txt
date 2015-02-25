@@ -54,6 +54,9 @@ find_package(catkin REQUIRED COMPONENTS
 add_message_files(
   FILES
   DetectedFace.msg
+  LearnedFace.msg
+  RecognizedFace.msg
+  TargetFace.msg
 #   Message2.msg
 )
 
