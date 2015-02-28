@@ -3,6 +3,7 @@
 # into PiPan controls to manipulate a pan-tilt camera
 # It publishes joint state messages.
 # =======================================================
+from __future__ import division
 import rospy
 from sensor_msgs.msg import Joy
 from sensor_msgs.msg import JointState
@@ -71,7 +72,7 @@ dy = 0
 goCenter = False
 
 def pan_tilt():
-    global p, x, y, dx, dy, goCenter
+    global p, x0, y0, x, y, dx, dy, goCenter
     while True:
 	if (goCenter):
 	    x = x0
@@ -89,8 +90,8 @@ def pan_tilt():
 	    p.go(x, y)
 	    publish_joint_state()
 	# uncomment the else block to actively hold the position
-	#else:
-	#    p.go(x, y)
+	else:
+	    p.go(x, y)
 	time.sleep(0.05)
 
 def publish_joint_state():
@@ -129,15 +130,15 @@ def start():
     p = PanTilt()
     t = threading.Thread(target=pan_tilt)
     t.daemon = True
-    # subscribed to joystick inputs on topic "joy"
-    rospy.Subscriber("joy", Joy, callback)
+    t.start()
+    # starts the node
+    rospy.init_node('pipan_node')
     # publish joint states to sync with rviz virtual model
     # the topic to publish to is defined in the source_list parameter
     # as:  rosparam set source_list "['joints']"
     publisher = rospy.Publisher("joints", JointState)
-    # starts the node
-    rospy.init_node('pipan_node')
-    t.start()
+    # subscribed to joystick inputs on topic "joy"
+    rospy.Subscriber("joy", Joy, callback)
     rospy.spin()
 
 if __name__ == '__main__':
