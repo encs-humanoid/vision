@@ -10,10 +10,10 @@ import time
 import threading
 from math import pi
 
-##### TODO Fix the pin assignments
-left_tilt_pin = 0
-right_tilt_pin = 1
-pan_pin = 2
+##### pin assignments
+left_tilt_pin = 2
+right_tilt_pin = 0
+pan_pin = 1
 
 class PanTilt:
     def __init__(self):
@@ -32,13 +32,16 @@ class PanTilt:
     def go(self, pan_angle, tilt_angle):
 	self.pwm(left_tilt_pin, self.map_left_tilt_angle(tilt_angle))
 	self.pwm(right_tilt_pin, self.map_right_tilt_angle(tilt_angle))
-	self.pwm(pan_pin, pan_angle)
+	self.pwm(pan_pin, self.map_pan_angle(pan_angle))
 
-    def map_left_tilt_angle(angle):
-	return map(angle, 0, 180, 0, 180)  #### TODO fix the angle mapping
+    def map_left_tilt_angle(self, angle):
+	return map(angle, 0, 100, 145, 85)
 
-    def map_right_tilt_angle(angle):
-	return map(angle, 0, 180, 180, 0)  #### TODO fix the angle mapping
+    def map_right_tilt_angle(self, angle):
+	return map(angle, 0, 100, 150, 210)
+
+    def map_pan_angle(self, angle):
+	return map(angle, 0, 100, 176, 66)
 
 def map(value, domainLow, domainHigh, rangeLow, rangeHigh):
     return ((value - domainLow) / (domainHigh - domainLow)) * (rangeHigh - rangeLow) + rangeLow
@@ -50,17 +53,17 @@ def map(value, domainLow, domainHigh, rangeLow, rangeHigh):
 
 # servo angle limits
 loX = 0
-hiX = 180
+hiX = 100
 loY = 0
-hiY = 180
+hiY = 100
 
 speedFactor = 4
 speedFactorX = -speedFactor
 speedFactorY = speedFactor
 
 # initial position and velocity
-x0 = 90
-y0 = 90
+x0 = 50
+y0 = 50
 x = x0
 y = y0
 dx = 0
