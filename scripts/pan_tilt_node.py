@@ -12,9 +12,9 @@ import threading
 from math import pi
 
 ##### pin assignments
-left_tilt_pin = 2
-right_tilt_pin = 0
-pan_pin = 1
+left_tilt_pin = 1
+right_tilt_pin = 2
+pan_pin = 0
 
 class PanTilt:
     def __init__(self):
@@ -36,10 +36,10 @@ class PanTilt:
 	self.pwm(pan_pin, self.map_pan_angle(pan_angle))
 
     def map_left_tilt_angle(self, angle):
-	return map(angle, 0, 100, 145, 85)
+	return map(angle, 0, 100, 130, 190)
 
     def map_right_tilt_angle(self, angle):
-	return map(angle, 0, 100, 150, 210)
+	return map(angle, 0, 100, 165, 105)
 
     def map_pan_angle(self, angle):
 	return map(angle, 0, 100, 176, 66)
