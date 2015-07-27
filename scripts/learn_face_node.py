@@ -82,12 +82,15 @@ class FaceEncounter(object):
 	    prev = self.faces[-1]
 	    delta_x = abs(face.x - prev.x)
 	    delta_y = abs(face.y - prev.y)
+	    delta_w = abs(face.w - prev.w)
+	    delta_h = abs(face.h - prev.h)
 	    delta_t = abs((face.header.stamp - prev.header.stamp).to_sec() * 1000)
 	    #print face.header.frame_id + " dx=" + str(delta_x) + ", dy=" + str(delta_y) + ", dt=" + str(delta_t)
-	    if delta_x <= delta_xy_px and delta_y <= delta_xy_px and delta_t <= delta_t_ms:
-	        return True
-	    else:
-	    	return False
+	    return delta_x <= delta_xy_px and \
+	    	   delta_y <= delta_xy_px and \
+		   delta_w <= delta_xy_px and \
+		   delta_h <= delta_xy_px and \
+		   delta_t <= delta_t_ms
 	else:
 	    return True
 
@@ -196,7 +199,7 @@ class FaceEncounter(object):
 	with open(faces_txt, "a") as f:
 	    for i, learned_face in enumerate(learned_faces):
 		f.write("\t".join([learned_face.filepath, str(learned_face.encounter_id), str(learned_face.max_overlap), str(learned_face.avg_overlap), str(learned_face.min_overlap)]) + "\n")
-	print "wrote " + faces_txt
+	#print "wrote " + faces_txt
 
 
 class LearnFaceNode(object):
@@ -276,7 +279,7 @@ class LearnFaceNode(object):
 		    # if encounter expires before reaching max faces publish and close
 		    # it, if it has min faces
 		    if len(encounter) >= self.min_faces:
-			print "publishing EXPIRED encounter " + str(encounter.id)
+			rospy.loginfo("publishing EXPIRED encounter %d", encounter.id)
 			self.publish_encounter(encounter)
 			encounter.close() # write encounter stats to faces.txt
 		    to_remove.append(i)
@@ -289,7 +292,7 @@ class LearnFaceNode(object):
 		    	encounter.save()
 		    # if encounter reached max size, publish, close, and remove it
 		    if len(encounter) >= self.max_faces:
-			print "publishing MAXED encounter " + str(encounter.id)
+			rospy.loginfo("publishing MAXED encounter %d", encounter.id)
 			self.publish_encounter(encounter)
 			encounter.close() # write encounter stats to faces.txt
 			to_remove.append(i)
@@ -309,7 +312,7 @@ class LearnFaceNode(object):
 	learned_faces = encounter.get_learned_faces()
 	for learned_face in learned_faces:
 	    self.learn_pub.publish(learned_face)
-	print "published learned face encounter " + str(encounter.id)
+	rospy.loginfo("published learned face encounter %d", encounter.id)
 
 
 def mkdir(path):

@@ -82,7 +82,9 @@ class RecognizeFaceNode(object):
 
     def load_facedb(self):
 	self.next_processor_index = 0
-	print "loading face database"
+	rospy.loginfo("loading face database")
+	rospy.loginfo('Current working directory %s', os.getcwd())
+	rospy.loginfo('Searching facedb %s', os.path.join(self.facedb_path, "*"))
 	for encounter_folder in glob.iglob(os.path.join(self.facedb_path, "*")):
 	    encounter_id = encounter_folder.split("/")[-1]
 	    if encounter_id.isdigit(): # skip any which are not digits
@@ -97,10 +99,10 @@ class RecognizeFaceNode(object):
 			self.processors[self.next_processor_index].db_queue.put(line)
 			self.next_processor_index += 1
 			count += 1
-		    print "loaded " + str(count) + " images from face encounter " + encounter_id
+		    rospy.loginfo("loaded %d images from face encounter %s", count, encounter_id)
 		else:
-		    print "Missing file " + faces_txt
-	print "done loading face database"
+		    rospy.loginfo("Missing file %s", faces_txt)
+	rospy.loginfo("done loading face database")
 
 
     def on_detected_face(self, face):
@@ -115,7 +117,7 @@ class RecognizeFaceNode(object):
 	self.next_processor_index = self.next_processor_index % len(self.processors)
 	self.processors[self.next_processor_index].db_queue.put(learned_face)
 	self.next_processor_index += 1
-	print "on learned face " + str(learned_face.encounter_id) + " file " + learned_face.filepath
+	rospy.loginfo("on learned face %s file %s", str(learned_face.encounter_id), learned_face.filepath)
 
 
     def run(self):
@@ -149,7 +151,7 @@ class RecognizeFaceNode(object):
 	cv_image = self.bridge.imgmsg_to_cv2(face.image)
 	test_bits = set(get_pixelprint(cv_image))
 	
-	num_top_matches = 20
+	num_top_matches = 150
 	heap = [] # will store heap of tuples (overlap, Match)
 	for processor in self.processors:
 	    processor.reset()
@@ -178,6 +180,8 @@ class RecognizeFaceNode(object):
 
 	# get unique face encounter ids from the top matches in the heap
 	ids = set([m.encounter_id for m in list])
+
+	rospy.loginfo('Matched encounter ids %s', str(sorted(ids)))
 
 	# publish recognition result
 	if len(ids) >= self.min_match:
@@ -272,6 +276,7 @@ class Processor(multiprocessing.Process):
 	self.input_queue = multiprocessing.Queue()
 	self.output_queue = multiprocessing.Queue()
 	self._has_more = False
+	self.cwd = os.getcwd()
 	self.image_database = []
 
 
@@ -288,6 +293,7 @@ class Processor(multiprocessing.Process):
 
 
     def run(self):
+    	os.chdir(self.cwd)
 	try:
 	    while True:
 		# check for new images to add to the database shard for this process
@@ -304,11 +310,11 @@ class Processor(multiprocessing.Process):
 			cv_image = np.array(db_image, dtype=np.float32)
 			db_bits = set(get_pixelprint(cv_image))
 			self.image_database.append(DBImage(db_file, encounter_id, max_overlap, avg_overlap, min_overlap, db_bits))
-			print "added encounter " + str(encounter_id) + " file " + db_file
+			#print "added encounter " + str(encounter_id) + " file " + db_file
 		    elif isinstance(db_object, LearnedFace):
 			f = db_object
 			self.image_database.append(DBImage(f.filepath, f.encounter_id, f.max_overlap, f.avg_overlap, f.min_overlap, f.bits))
-			print "added encounter " + str(f.encounter_id) + " file " + f.filepath
+			#print "added encounter " + str(f.encounter_id) + " file " + f.filepath
 		    continue
 		except Queue.Empty, e:
 		    pass
