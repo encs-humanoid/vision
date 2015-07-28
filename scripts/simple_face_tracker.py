@@ -5,6 +5,7 @@
 # Subscribes To:
 # - /stereo/left/image_raw
 # - /stereo/right/image_raw
+# - /control
 #
 # Publishes To:
 # - /joy
@@ -35,6 +36,7 @@ import atexit
 import cv2
 import rospy
 import sensor_msgs.msg
+import std_msgs.msg
 import sys
 
 
@@ -44,6 +46,7 @@ class SimpleFaceTracker(object):
 
 	self.bridge = CvBridge()
 	self.last_ros_image = None
+	self.is_tracking = True
 
 	myargs = rospy.myargv(sys.argv) # process ROS args and return the rest
 	parser = argparse.ArgumentParser(description="Detect faces in a ROS image stream")
@@ -52,6 +55,7 @@ class SimpleFaceTracker(object):
 	self.options = parser.parse_args(myargs[1:])
 
 	input_topic = self.get_param('~in', "/vision/image")
+	control_topic = self.get_param('~control', "/control")
 	output_topic = self.get_param('~out', "/joy")
 
 	# set the fraction of the image frame size where the a face appears
@@ -68,6 +72,7 @@ class SimpleFaceTracker(object):
 
 	self.face_cascade = cv2.CascadeClassifier(face_cascade_path)
 	image_sub = rospy.Subscriber(input_topic, sensor_msgs.msg.Image, self.on_image)
+	control_sub = rospy.Subscriber(control_topic, std_msgs.msg.String, self.on_control)
 	self.joy_pub = rospy.Publisher(output_topic, sensor_msgs.msg.Joy, queue_size=1)
 
 
@@ -81,6 +86,14 @@ class SimpleFaceTracker(object):
 	self.last_ros_image = ros_image
 
 
+    def on_control(self, control):
+        rospy.loginfo('Received control message %s', control)
+	if control.data == "resume_face_tracking":
+	    self.is_tracking = True
+	elif control.data == "stop_face_tracking":
+	    self.is_tracking = False
+
+
     def run(self):
 	rate = rospy.Rate(30) # 30 Hz
 
@@ -92,7 +105,8 @@ class SimpleFaceTracker(object):
 		    # image handle so we don't pick up the same image next time
 		    ros_image, self.last_ros_image = self.last_ros_image, None
 
-		    self.process_image(ros_image)
+		    if self.is_tracking:
+			self.process_image(ros_image)
 	except KeyboardInterrupt:
 	    pass
 
