@@ -61,7 +61,7 @@ class RecognizeFaceNode(object):
 
 	rospy.Subscriber(detect_topic, DetectedFace, self.on_detected_face)
 	rospy.Subscriber(learn_topic, LearnedFace, self.on_learned_face)
-	rospy.Subscriber(control_topic, String, self.on_control)
+	rospy.Subscriber(control_topic, std_msgs.msg.String, self.on_control)
 	self.rec_pub = rospy.Publisher(rec_topic, RecognizedFace, queue_size=50)
 	self.unrec_pub = rospy.Publisher(unrec_topic, DetectedFace, queue_size=50)
 
