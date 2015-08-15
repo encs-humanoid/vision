@@ -4,6 +4,7 @@
 #
 # Subscribes To:
 # - /detected_face
+# - /control
 #
 # Publishes To:
 # - /recognized_face
@@ -44,9 +45,11 @@ class RecognizeFaceNode(object):
 	self.bridge = CvBridge()
 
 	self.last_detected_face = None
+	self.is_recognizing = True
 
 	detect_topic = self.get_param('~in_detect', '/detected_face')
 	learn_topic = self.get_param('~in_learn', '/learned_face')
+	control_topic = self.get_param('~in_control', '/control')
 	rec_topic = self.get_param('~out_rec', '/recognized_face')
 	unrec_topic = self.get_param('~out_unrec', '/unrecognized_face')
 	self.min_match = int(self.get_param('~min_match', '5'))
@@ -58,6 +61,7 @@ class RecognizeFaceNode(object):
 
 	rospy.Subscriber(detect_topic, DetectedFace, self.on_detected_face)
 	rospy.Subscriber(learn_topic, LearnedFace, self.on_learned_face)
+	rospy.Subscriber(control_topic, String, self.on_control)
 	self.rec_pub = rospy.Publisher(rec_topic, RecognizedFace, queue_size=50)
 	self.unrec_pub = rospy.Publisher(unrec_topic, DetectedFace, queue_size=50)
 
@@ -120,6 +124,15 @@ class RecognizeFaceNode(object):
 	rospy.loginfo("on learned face %s file %s", str(learned_face.encounter_id), learned_face.filepath)
 
 
+    def on_control(self, control_msg):
+	if control_msg.data == "stop_face_recognition":
+	    self.is_recognizing = False
+	    rospy.loginfo("stopped face recognition")
+	elif contro_msg.data == "resume_face_recognition":
+	    self.is_recognizing = True
+	    rospy.loginfo("resumed face recognition")
+
+
     def run(self):
 	rate = rospy.Rate(30) # 30 Hz
 	try:
@@ -130,7 +143,8 @@ class RecognizeFaceNode(object):
 		    # handle so we don't pick up the same face next time
 		    face, self.last_detected_face = self.last_detected_face, None
 
-		    self.recognize_face(face)
+		    if self.is_recognizing:
+			self.recognize_face(face)
 	except KeyboardInterrupt:
 	    pass
 
