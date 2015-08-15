@@ -1,0 +1,22 @@
+<launch>
+
+        <group ns="/stereo/left">
+                <node name="simple_face_tracker" pkg="vision" type="simple_face_tracker.py">
+                        <param name="in" value="/stereo/left/image_raw" />
+                        <param name="center_gaze_x" value="0.7" />
+                        <param name="center_gaze_y" value="0.35" />
+                </node>
+        </group>
+
+<!--
+        <group ns="/stereo/right">
+                <node name="simple_face_tracker" pkg="vision" type="simple_face_tracker.py">
+                        <param name="in" value="/stereo/right/image_raw" />
+                        <param name="center_gaze_x" value="0.33" />
+                        <param name="center_gaze_y" value="0.54" />
+                </node>
+        </group>
+-->
+
+</launch>
+
