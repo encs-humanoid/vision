@@ -1,22 +1,36 @@
 <launch>
 
         <group ns="/stereo/left">
+<!--
                 <node name="simple_face_tracker" pkg="vision" type="simple_face_tracker.py">
                         <param name="in" value="/stereo/left/image_raw" />
                         <param name="center_gaze_x" value="0.7" />
                         <param name="center_gaze_y" value="0.35" />
                 </node>
+-->
+		<node name="annotate_face_node" pkg="vision" type="annotate_face_node.py">
+			<param name="image" value="/stereo/left/image_raw" />
+			<param name="out" value="/stereo/left/image_annotated_raw" />
+		</node>
+		<node name="republish_annotated" pkg="image_transport" type="republish"
+			args="raw in:=/stereo/left/image_annotated_raw compressed out:=/stereo/left/image_annotated"/>
         </group>
 
-<!--
         <group ns="/stereo/right">
+<!--
                 <node name="simple_face_tracker" pkg="vision" type="simple_face_tracker.py">
                         <param name="in" value="/stereo/right/image_raw" />
                         <param name="center_gaze_x" value="0.33" />
                         <param name="center_gaze_y" value="0.54" />
                 </node>
-        </group>
 -->
+		<node name="annotate_face_node" pkg="vision" type="annotate_face_node.py">
+			<param name="image" value="/stereo/right/image_raw" />
+			<param name="out" value="/stereo/right/image_annotated_raw" />
+		</node>
+		<node name="republish_annotated" pkg="image_transport" type="republish"
+			args="raw in:=/stereo/right/image_annotated_raw compressed out:=/stereo/right/image_annotated"/>
+        </group>
 
 </launch>
 
