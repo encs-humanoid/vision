@@ -39,10 +39,11 @@ class PanTilt:
 	return map(angle, 0, 100, 130, 190)
 
     def map_right_tilt_angle(self, angle):
-	return map(angle, 0, 100, 165, 105)
+	return map(angle, 0, 100, 185, 125)
+	#return map(angle, 0, 100, 165, 105)
 
     def map_pan_angle(self, angle):
-	return map(angle, 0, 100, 176, 66)
+	return map(angle, 0, 100, 180, 70)
 
 def map(value, domainLow, domainHigh, rangeLow, rangeHigh):
     return ((value - domainLow) / (domainHigh - domainLow)) * (rangeHigh - rangeLow) + rangeLow
