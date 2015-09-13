@@ -8,12 +8,22 @@
                         <param name="center_gaze_y" value="0.35" />
                 </node>
 -->
-		<node name="annotate_face_node" pkg="vision" type="annotate_face_node.py">
+<!--
+		<node name="republish_relay_decomp" pkg="image_transport" type="republish"
+			args="compressed in:=/stereo/left/image_relay _image_transport:=compressed raw out:=/stereo/left/image_relay_raw"/>
+-->
+		<node name="annotate_face_node" pkg="vision" type="annotate_face_node.py" cwd="node">
+			<!--
+			<param name="image" value="/stereo/left/image_relay_raw" />
+			-->
 			<param name="image" value="/stereo/left/image_raw" />
+			<param name="detected" value="/stereo/left/detected_face" />
 			<param name="out" value="/stereo/left/image_annotated_raw" />
 		</node>
 		<node name="republish_annotated" pkg="image_transport" type="republish"
 			args="raw in:=/stereo/left/image_annotated_raw compressed out:=/stereo/left/image_annotated"/>
+		<node name="image_view_annotated" pkg="image_view" type="image_view"
+			args="image:=/stereo/left/image_annotated _image_transport:=compressed"/>
         </group>
 
         <group ns="/stereo/right">
@@ -24,12 +34,22 @@
                         <param name="center_gaze_y" value="0.54" />
                 </node>
 -->
-		<node name="annotate_face_node" pkg="vision" type="annotate_face_node.py">
+<!--
+		<node name="republish_relay_decomp" pkg="image_transport" type="republish"
+			args="compressed in:=/stereo/right/image_relay _image_transport:=compressed raw out:=/stereo/right/image_relay_raw"/>
+-->
+		<node name="annotate_face_node" pkg="vision" type="annotate_face_node.py" cwd="node">
+			<!--
+			<param name="image" value="/stereo/right/image_relay_raw" />
+			-->
 			<param name="image" value="/stereo/right/image_raw" />
+			<param name="detected" value="/stereo/right/detected_face" />
 			<param name="out" value="/stereo/right/image_annotated_raw" />
 		</node>
 		<node name="republish_annotated" pkg="image_transport" type="republish"
 			args="raw in:=/stereo/right/image_annotated_raw compressed out:=/stereo/right/image_annotated"/>
+		<node name="image_view_annotated" pkg="image_view" type="image_view"
+			args="image:=/stereo/right/image_annotated _image_transport:=compressed"/>
         </group>
 
 </launch>

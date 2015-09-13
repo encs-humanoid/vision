@@ -43,10 +43,15 @@ from cv_bridge import CvBridge, CvBridgeError
 import argparse
 import atexit
 import cv2
+import face_util
+import numpy as np
+#import oct2py
+import pdb
 import rospy
 import sensor_msgs.msg
 import std_msgs.msg
 import sys
+import time
 import vision.msg
 
 
@@ -62,11 +67,15 @@ class AnnotateFaceNode(object):
 	rospy.init_node('annotate_face_node', anonymous=True)
 
 	self.bridge = CvBridge()
+	#self.oc = oct2py.Oct2Py()
 	self.last_ros_image = None
 	self.last_target_face = None
 	self.last_recognized_face = None
 	self.last_unrecognized_face = None
 	self.last_detected_face = None
+	self.last_detected_face_ts = time.time()
+
+	#self.oc.load('face_model1.txt')
 
 	myargs = rospy.myargv(sys.argv) # process ROS args and return the rest
 	parser = argparse.ArgumentParser(description="Annotate faces in a ROS image stream")
@@ -118,7 +127,9 @@ class AnnotateFaceNode(object):
     def on_detected_face(self, detected_face):
 	# TODO support multiple faces in frame
 	self.last_detected_face = detected_face
-	rospy.loginfo('Received detected face message')
+	self.last_detected_face_ts = time.time()
+	print detected_face.header.stamp, detected_face.header.frame_id, detected_face.x, detected_face.y, detected_face.w, detected_face.h
+	#rospy.loginfo('Received detected face message')
 
 
     def run(self):
@@ -140,7 +151,8 @@ class AnnotateFaceNode(object):
 
 
     def on_exit(self):
-	pass  # placeholder for any necessary cleanup
+	#self.oc.exit()
+	pass
 
 
     def process_image(self, ros_image):
@@ -157,9 +169,20 @@ class AnnotateFaceNode(object):
 
 	    # annotate the image
 	    # highlight detected face in blue
-	    d, self.last_detected_face = self.last_detected_face, None
+	    d = self.last_detected_face
+	    if time.time() - self.last_detected_face_ts > 2:
+	    	self.last_detected_face = None
 	    if d:
 		cv2.rectangle(color_image, (d.x, d.y), (d.x + d.w, d.y + d.h), Color.BLUE, 2)
+		#cv_image = self.bridge.imgmsg_to_cv2(d.image)
+		#cw, ch = cv_image.shape[1::-1] # note image shape is h, w, d; reverse (h, w)->(w, h)
+		#x = np.reshape(cv_image, (1, cw * ch))[0]
+		#self.oc.push('x', x)
+		pass
+		#self.oc.eval('predictFace')
+		#face_pred = self.oc.pull('face_pred')
+		#cv2.putText(color_image, str(face_pred[0]), (d.x, d.y - 10), cv2.FONT_HERSHEY_SIMPLEX, 2, 255)
+		#print str(face_pred) + " at " + str(d.x) + ", " + str(d.y)
 
 	    # highlight unrecognized face in red
 	    u, self.last_unrecognized_face = self.last_unrecognized_face, None
