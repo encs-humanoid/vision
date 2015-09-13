@@ -128,7 +128,7 @@ class RecognizeFaceNode(object):
 	if control_msg.data == "stop_face_recognition":
 	    self.is_recognizing = False
 	    rospy.loginfo("stopped face recognition")
-	elif contro_msg.data == "resume_face_recognition":
+	elif control_msg.data == "resume_face_recognition":
 	    self.is_recognizing = True
 	    rospy.loginfo("resumed face recognition")
 
@@ -307,6 +307,7 @@ class Processor(multiprocessing.Process):
 
 
     def run(self):
+    	valid_encounter_threshold = 65
     	os.chdir(self.cwd)
 	try:
 	    while True:
@@ -323,11 +324,17 @@ class Processor(multiprocessing.Process):
 			db_image = Image.open(db_file)
 			cv_image = np.array(db_image, dtype=np.float32)
 			db_bits = set(get_pixelprint(cv_image))
-			self.image_database.append(DBImage(db_file, encounter_id, max_overlap, avg_overlap, min_overlap, db_bits))
+			# min_overlap < 65 usually implies a bad image in the database, which
+			# can hamper recognition.  exclude any encounters with a low minimum
+			if min_overlap >= valid_encounter_threshold:
+			    self.image_database.append(DBImage(db_file, encounter_id, max_overlap, avg_overlap, min_overlap, db_bits))
 			#print "added encounter " + str(encounter_id) + " file " + db_file
 		    elif isinstance(db_object, LearnedFace):
 			f = db_object
-			self.image_database.append(DBImage(f.filepath, f.encounter_id, f.max_overlap, f.avg_overlap, f.min_overlap, f.bits))
+			# min_overlap < 65 usually implies a bad image in the database, which
+			# can hamper recognition.  exclude any encounters with a low minimum
+			if f.min_overlap >= valid_encounter_threshold:
+			    self.image_database.append(DBImage(f.filepath, f.encounter_id, f.max_overlap, f.avg_overlap, f.min_overlap, f.bits))
 			#print "added encounter " + str(f.encounter_id) + " file " + f.filepath
 		    continue
 		except Queue.Empty, e:
