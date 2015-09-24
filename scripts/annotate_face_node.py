@@ -68,6 +68,7 @@ class AnnotateFaceNode(object):
 
 	self.bridge = CvBridge()
 	#self.oc = oct2py.Oct2Py()
+	self.frame_id = ""
 	self.last_ros_image = None
 	self.last_target_face = None
 	self.last_recognized_face = None
@@ -126,6 +127,7 @@ class AnnotateFaceNode(object):
 
     def on_detected_face(self, detected_face):
 	# TODO support multiple faces in frame
+	self.frame_id = detected_face.header.frame_id
 	self.last_detected_face = detected_face
 	self.last_detected_face_ts = time.time()
 	print detected_face.header.stamp, detected_face.header.frame_id, detected_face.x, detected_face.y, detected_face.w, detected_face.h
@@ -186,12 +188,12 @@ class AnnotateFaceNode(object):
 
 	    # highlight unrecognized face in red
 	    u, self.last_unrecognized_face = self.last_unrecognized_face, None
-	    if u:
+	    if u and self.frame_id == u.header.frame_id:
 		cv2.rectangle(color_image, (u.x, u.y), (u.x + u.w, u.y + u.h), Color.RED, 2)
 
 	    # highlight recognized face in green
 	    r, self.last_recognized_face = self.last_recognized_face, None
-	    if r:
+	    if r and self.frame_id == r.header.frame_id:
 		cv2.rectangle(color_image, (r.x, r.y), (r.x + r.w, r.y + r.h), Color.GREEN, 2)
 
 	    # TODO highlight target face in yellow
