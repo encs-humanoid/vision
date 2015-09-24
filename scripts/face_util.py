@@ -5,6 +5,7 @@
 # Copyright 2015, IEEE ENCS Humanoid Robot Project
 #===================================================================
 from __future__ import division
+import csv
 import glob
 import Image
 import numpy as np
@@ -36,6 +37,43 @@ def get_bits(filename):
     bits = set(get_pixelprint(cv_image))
     cache[filename] = bits
     return bits
+
+
+def get_pixels(filename):
+    '''
+    Return pixels as an array.
+    '''
+    image = Image.open(filename)
+    cv_image = np.array(image, dtype=np.float32)
+    cw, ch = cv_image.shape[1::-1] # note image shape is h, w, d; reverse (h, w)->(w, h)
+    return np.reshape(cv_image, (1, cw * ch))[0]
+
+
+def read_y_map(directory, filename):
+    with open(os.path.join(directory, filename), "r") as f:
+    	lines = f.readlines()
+    y_map = {}
+    for line in lines:
+    	values = line.split()
+    	y_map[values[1]] = int(values[0])
+    return y_map
+
+
+def write_dataset(directory):
+    y_map = read_y_map(directory, "y-map.txt")
+
+    with open(os.path.join(directory, "X.csv"), "w") as X:
+        with open(os.path.join(directory, "y.csv"), "w") as y:
+	    X_writer = csv.writer(X)
+	    y_writer = csv.writer(y)
+	    # find all PNG files under folders in the directory
+	    for png_file in glob.iglob(os.path.join(directory, "*", "*.png")):
+		# read the image pixels into arrays
+		pixels = get_pixels(png_file)
+
+		# write out the X.csv and y.csv files for the dataset
+		X_writer.writerow(pixels)
+		y_writer.writerow([y_map[png_file.split("/")[-2]]])
 
 
 if __name__ == '__main__':
