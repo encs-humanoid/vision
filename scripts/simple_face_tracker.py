@@ -34,19 +34,25 @@ from cv_bridge import CvBridge, CvBridgeError
 import argparse
 import atexit
 import cv2
+from math import pi
 import rospy
 import sensor_msgs.msg
 import std_msgs.msg
 import sys
+import time
 
 
 class SimpleFaceTracker(object):
     def __init__(self):
-	rospy.init_node('simple_face_tracker', anonymous=True)
+	rospy.init_node("simple_face_tracker", anonymous=True)
 
 	self.bridge = CvBridge()
-	self.last_ros_image = None
+	self.last_ros_image_left = None
+	self.last_ros_image_right = None
+	self.last_joint_state = None
 	self.is_tracking = True
+	self.time_of_last_face = 0
+	self.look_straight_target_selected_time = 0
 
 	myargs = rospy.myargv(sys.argv) # process ROS args and return the rest
 	parser = argparse.ArgumentParser(description="Detect faces in a ROS image stream")
@@ -54,25 +60,43 @@ class SimpleFaceTracker(object):
 	parser.add_argument("--debug", help="print out additional info", action="store_true")
 	self.options = parser.parse_args(myargs[1:])
 
-	input_topic = self.get_param('~in', "/vision/image")
-	control_topic = self.get_param('~control', "/control")
-	output_topic = self.get_param('~out', "/joy")
+	left_topic = self.get_param("~left", "/stereo/left/image_raw")
+	right_topic = self.get_param("~right", "/stereo/right/image_raw")
+	control_topic = self.get_param("~control", "/control")
+	joints_topic = self.get_param("~joints", "/joints")
+	output_topic = self.get_param("~out", "/joy")
 
 	# set the fraction of the image frame size where the a face appears
 	# to be in the center of the camera's gaze.  Default is image center.
-	self.center_gaze_x = float(self.get_param('~center_gaze_x', "0.5"))
-	self.center_gaze_y = float(self.get_param('~center_gaze_y', "0.5"))
+	self.center_gaze_left_x = float(self.get_param("~center_gaze_left_x", "0.5"))
+	self.center_gaze_left_y = float(self.get_param("~center_gaze_left_y", "0.5"))
+	self.center_gaze_right_x = float(self.get_param("~center_gaze_right_x", "0.5"))
+	self.center_gaze_right_y = float(self.get_param("~center_gaze_right_y", "0.5"))
+
+	self.max_no_face_staring_time_sec = float(self.get_param("~max_no_face_staring_time_sec", "2.0"))
+	# maximum seconds to wait for target to be reached before selecting a new target
+	self.max_target_time_sec = float(self.get_param("~max_target_time_sec", "2.0"))
+
+	#  target achieved threshold in radians (parameter specified in degrees)
+	self.pose_target_achieved_rad = (pi / 180.0) * float(self.get_param("~pose_target_achieved_deg", "10.0"))
+	self.tilt_joint = self.get_param("~tilt_joint", "torso_neck_joint")
+	self.pan_joint = self.get_param("~pan_joint", "upper_neck_head_joint")
+
+	self.pose_target = {self.pan_joint: 0.0, self.tilt_joint: 0.0}
+	self.pose = self.pose_target
 
 	# set the gain multiplier which converts the fractional position of
 	# a face with respect to the center of gaze into a joystick analog
 	# signal.  Joystick signals should be in [-1, 1], so gain is in [0, 1]
-	self.gain = float(self.get_param('~gain', "0.75"))
+	self.gain = float(self.get_param("~gain", "0.75"))
 
-	face_cascade_path = self.get_param('~face_cascade', '/usr/share/opencv/haarcascades/haarcascade_frontalface_default.xml')
+	face_cascade_path = self.get_param("~face_cascade", "/usr/share/opencv/haarcascades/haarcascade_frontalface_default.xml")
 
 	self.face_cascade = cv2.CascadeClassifier(face_cascade_path)
-	image_sub = rospy.Subscriber(input_topic, sensor_msgs.msg.Image, self.on_image)
+	left_image_sub = rospy.Subscriber(left_topic, sensor_msgs.msg.Image, self.on_left_image)
+	right_image_sub = rospy.Subscriber(right_topic, sensor_msgs.msg.Image, self.on_right_image)
 	control_sub = rospy.Subscriber(control_topic, std_msgs.msg.String, self.on_control)
+	joints_sub = rospy.Subscriber(joints_topic, sensor_msgs.msg.JointState, self.on_joints)
 	self.joy_pub = rospy.Publisher(output_topic, sensor_msgs.msg.Joy, queue_size=1)
 
 
@@ -82,8 +106,12 @@ class SimpleFaceTracker(object):
         return value
 
 
-    def on_image(self, ros_image):
-	self.last_ros_image = ros_image
+    def on_left_image(self, ros_image):
+	self.last_ros_image_left = ros_image
+
+
+    def on_right_image(self, ros_image):
+    	self.last_ros_image_right = ros_image
 
 
     def on_control(self, control):
@@ -94,19 +122,37 @@ class SimpleFaceTracker(object):
 	    self.is_tracking = False
 
 
+    def on_joints(self, joint_state):
+    	self.last_joint_state = joint_state
+	self.pose = {}
+	for i in range(len(joint_state.name)):
+	    self.pose[joint_state.name[i]] = joint_state.position[i]
+
+
     def run(self):
 	rate = rospy.Rate(30) # 30 Hz
 
 	try:
 	    while not rospy.is_shutdown():
 		rate.sleep() # give ROS a chance to run
-		if self.last_ros_image:
+		# process left image
+		if self.last_ros_image_left:
 		    # grab the last ROS image we have received and clear the
 		    # image handle so we don't pick up the same image next time
-		    ros_image, self.last_ros_image = self.last_ros_image, None
+		    ros_image, self.last_ros_image_left = self.last_ros_image_left, None
 
 		    if self.is_tracking:
-			self.process_image(ros_image)
+			self.process_image(ros_image, self.center_gaze_left_x, self.center_gaze_left_y)
+
+		# process right image
+		if self.last_ros_image_right:
+		    ros_image, self.last_ros_image_right = self.last_ros_image_right, None
+		    if self.is_tracking:
+			self.process_image(ros_image, self.center_gaze_right_x, self.center_gaze_right_y)
+
+		# if no face in view, look straight
+		if time.time() - self.time_of_last_face > self.max_no_face_staring_time_sec:
+		    self.look_straight()
 	except KeyboardInterrupt:
 	    pass
 
@@ -118,7 +164,7 @@ class SimpleFaceTracker(object):
 	    cv2.destroyAllWindows()
 
 
-    def process_image(self, ros_image):
+    def process_image(self, ros_image, center_gaze_x, center_gaze_y):
 	try:
 	    # convert the ROS image to OpenCV and convert it to gray scale
 	    color_image = self.bridge.imgmsg_to_cv2(ros_image, "bgr8")
@@ -128,21 +174,25 @@ class SimpleFaceTracker(object):
 
 	    # Face Tracking - generate Joy messages to move face toward the center of gaze
 	    if len(faces) > 0:
+		self.time_of_last_face = time.time()
 		(x, y, w, h) = faces[0]
 		if self.options.show:
 		    # Draw a rectangle around the face
 		    cv2.rectangle(color_image, (x, y), (x+w, y+h), (0, 0, 255), 2)
 		iw, ih = color_image.shape[1::-1] # shape is h, w, d; reverse (h, w)->(w, h)
 		fx, fy = (x + w/2, y + h/2); # center of face rectangle
-		jx = self.gain * (iw * self.center_gaze_x - fx) / iw
-		jy = self.gain * (ih * self.center_gaze_y - fy) / ih
+		jx = self.gain * (iw * center_gaze_x - fx) / iw
+		jy = self.gain * (ih * center_gaze_y - fy) / ih
 		if self.options.debug:
 		    print str((fx, fy)) + ": w=" + str(w) + ", h=" + str(h) + ", jx=" + str(jx) + ", jy=" + str(jy)
 
 		self.joy_pub.publish(self.new_joy_message(jx, jy))
-	    else:
-		self.joy_pub.publish(self.new_joy_message(0, 0))
+#		print "tracking face at " + str(fx) + ", " + str(fy)
+#	    else:
+#		self.joy_pub.publish(self.new_joy_message(0, 0))
 
+	    # TODO fix the show option to work with two image streams
+	    # consider drawing the left and right images side-by-side in the same window
 	    if self.options.show:
 		cv2.imshow('Video', color_image)
 
@@ -168,6 +218,48 @@ class SimpleFaceTracker(object):
 	joy.axes = [x_axis, y_axis, 0.0, 0.0, 0.0, 0.0, 0.0]
 	joy.buttons = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 	return joy
+
+
+    def look_straight(self):
+    	'''
+	Cause the robot to look around, rather than remaining stuck in a static pose.
+
+	To do this, select a target pose.  Currently this is the (0,0) straight forward looking pose.
+	Determine the direction vector from the current pose to the target pose and send a joystick
+	message to move the head in the desired direction.
+	If sufficient time has passed since the selection of the previous target pose, or the
+	current pose is near enough the target, then select a new target pose and repeat.
+	'''
+	if time.time() - self.look_straight_target_selected_time >= self.max_target_time_sec:
+	    self.select_look_straight_target()
+	elif self.max_pose_deviation_from_target_rad() <= self.pose_target_achieved_rad:
+	    self.select_look_straight_target()
+	
+	# calculate the direction to the target pose and send a joystick message
+	iw, ih = pi, pi   # no particular meaning to these, but they work empirically
+	fx, fy = self.pose[self.pan_joint], self.pose[self.tilt_joint]
+	jx = self.gain * (iw * self.pose_target[self.pan_joint] - fx) / iw
+	jy = 3 * self.gain * (ih * self.pose_target[self.tilt_joint] - fy) / ih
+	#print "look_straight " + str(jx) + ", " + str(jy) + ", pose=" + str(self.pose)
+	self.joy_pub.publish(self.new_joy_message(jx, jy))
+
+
+    def select_look_straight_target(self):
+    	# TODO change to look_around and select new random target from a 2D normal distribution centered at (0,0)
+	self.pose_target = {self.pan_joint: 0.0, self.tilt_joint: 0.0}
+	self.look_straight_target_selected_time = time.time()
+
+
+    def max_pose_deviation_from_target_rad(self):
+    	'''
+	Calculate the maximum deviation between the target pose and the current pose in radians.
+	'''
+	if self.last_joint_state is None:
+	    return 0.0
+
+	pan_deviation = abs(self.pose_target[self.pan_joint] - self.pose[self.pan_joint])
+	tilt_deviation = abs(self.pose_target[self.pan_joint] - self.pose[self.tilt_joint])
+	return max(pan_deviation, tilt_deviation)
 
 
 if __name__ == '__main__':
