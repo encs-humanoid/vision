@@ -151,12 +151,16 @@ class SimpleFaceTracker(object):
 			self.process_image(ros_image, self.center_gaze_right_x, self.center_gaze_right_y)
 
 		# if no face in view, look straight
-		if time.time() - self.time_of_last_face > self.max_no_face_staring_time_sec:
+		if not self.is_face_in_view() and self.is_tracking:
 		    self.look_straight()
 	except KeyboardInterrupt:
 	    pass
 
 	self.on_exit()
+
+
+    def is_face_in_view(self):
+    	return time.time() - self.time_of_last_face <= self.max_no_face_staring_time_sec
 
 
     def on_exit(self):
@@ -188,8 +192,8 @@ class SimpleFaceTracker(object):
 
 		self.joy_pub.publish(self.new_joy_message(jx, jy))
 #		print "tracking face at " + str(fx) + ", " + str(fy)
-#	    else:
-#		self.joy_pub.publish(self.new_joy_message(0, 0))
+	    elif self.is_face_in_view():
+		self.joy_pub.publish(self.new_joy_message(0, 0))
 
 	    # TODO fix the show option to work with two image streams
 	    # consider drawing the left and right images side-by-side in the same window
