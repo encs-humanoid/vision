@@ -347,8 +347,8 @@ class Processor(multiprocessing.Process):
 			break
 		    for item in self.image_database:
 			overlap = len(item.fp & test_bits)
-			# limit the results to matches which exceed the average overlap of the face encounter
-			if overlap >= item.avg_overlap:
+			# limit the results to matches which exceed the min overlap of the face encounter
+			if overlap >= item.min_overlap:
 			    self.output_queue.put(Match(overlap, item.encounter_id, item.filepath))
 		    self.output_queue.put(None)
 		except Queue.Empty, e:
