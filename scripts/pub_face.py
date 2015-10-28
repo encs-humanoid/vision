@@ -35,14 +35,14 @@ class PubFaceNode(object):
 
 	myargs = rospy.myargv(sys.argv) # process ROS args and return the rest
 	parser = argparse.ArgumentParser(description="Publish face messages given file names")
-	parser.add_argument("-f", "--facedb", dest="facedb", metavar="DIRECTORY", help="base directory to resolve file names to files")
+	parser.add_argument("-f", "--facedb", dest="facedb", default="facedb", metavar="DIRECTORY", help="base directory to resolve file names to files")
 	self.options = parser.parse_args(myargs[1:])
 
-	output_topic = rospy.get_param('~out', "/detected_face")
-	rospy.loginfo('Parameter %s has value %s', rospy.resolve_name('~out'), output_topic)
+	self.output_topic = rospy.get_param('~out', "/detected_face")
+	rospy.loginfo('Parameter %s has value %s', rospy.resolve_name('~out'), self.output_topic)
 
-	self.face_pub = rospy.Publisher(output_topic, DetectedFace, queue_size=5)
-	self.face_img_pub = rospy.Publisher(output_topic + "/image", sensor_msgs.msg.Image, queue_size=5)
+	self.face_pub = rospy.Publisher(self.output_topic, DetectedFace, queue_size=5)
+	self.face_img_pub = rospy.Publisher(self.output_topic + "/image", sensor_msgs.msg.Image, queue_size=5)
 
 
     def run(self):
@@ -81,6 +81,7 @@ class PubFaceNode(object):
 
 	    self.face_pub.publish(detected_face)
 	    self.face_img_pub.publish(detected_face.image)
+	    rospy.loginfo('Published ' + filename + " to " + self.output_topic)
 	#except:
 	#    rospy.loginfo('Failed to open image file ' + filename)
 

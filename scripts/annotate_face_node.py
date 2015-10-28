@@ -45,7 +45,7 @@ import atexit
 import cv2
 import face_util
 import numpy as np
-#import oct2py
+import oct2py
 import pdb
 import rospy
 import sensor_msgs.msg
@@ -56,8 +56,9 @@ import vision.msg
 
 
 class Color(object):
+    WHITE = (255, 255, 255)
     BLUE = (255, 0, 0)
-    YELLOW = (255, 255, 0)
+    YELLOW = (0, 255, 255)
     GREEN = (0, 255, 0)
     RED = (0, 0, 255)
 
@@ -67,19 +68,23 @@ class AnnotateFaceNode(object):
 	rospy.init_node('annotate_face_node', anonymous=True)
 
 	self.bridge = CvBridge()
-	#self.oc = oct2py.Oct2Py()
+	self.oc = oct2py.Oct2Py()
 	self.last_ros_image = None
 	self.last_target_face = None
 	self.last_recognized_face = None
 	self.last_unrecognized_face = None
 	self.last_detected_face = None
 	self.last_detected_face_ts = time.time()
+	self.last_target_face_ts = time.time()
+	self.last_recognized_face_ts = time.time()
+	self.last_unrecognized_face_ts = time.time()
 
-	#self.oc.load('face_model1.txt')
+	self.oc.load('face_model1.txt')
 
 	myargs = rospy.myargv(sys.argv) # process ROS args and return the rest
 	parser = argparse.ArgumentParser(description="Annotate faces in a ROS image stream")
 	parser.add_argument("--debug", help="print out additional info", action="store_true")
+	parser.add_argument("--nonn", help="disable the neural network recognizer", action="store_true")
 	self.options = parser.parse_args(myargs[1:])
 
 	image_topic = self.get_param('~image', "/camera/image_raw")
@@ -109,18 +114,21 @@ class AnnotateFaceNode(object):
 
     def on_target_face(self, target_face):
 	self.last_target_face = target_face
-        rospy.loginfo('Received target face message')
+	self.last_target_face_ts = time.time()
+        #rospy.loginfo('Received target face message')
 
 
     def on_recognized_face(self, recognized_face):
 	# TODO support multiple faces in frame
 	self.last_recognized_face = recognized_face
+	self.last_recognized_face_ts = time.time()
 	rospy.loginfo('Received recognized face message')
 
 
     def on_unrecognized_face(self, unrecognized_face):
 	# TODO support multiple faces in frame
 	self.last_unrecognized_face = unrecognized_face
+	self.last_unrecognized_face_ts = time.time()
 	rospy.loginfo('Received unrecognized face message')
 
 
@@ -151,7 +159,7 @@ class AnnotateFaceNode(object):
 
 
     def on_exit(self):
-	#self.oc.exit()
+	self.oc.exit()
 	pass
 
 
@@ -174,15 +182,16 @@ class AnnotateFaceNode(object):
 	    	self.last_detected_face = None
 	    if d:
 		cv2.rectangle(color_image, (d.x, d.y), (d.x + d.w, d.y + d.h), Color.BLUE, 2)
-		#cv_image = self.bridge.imgmsg_to_cv2(d.image)
-		#cw, ch = cv_image.shape[1::-1] # note image shape is h, w, d; reverse (h, w)->(w, h)
-		#x = np.reshape(cv_image, (1, cw * ch))[0]
-		#self.oc.push('x', x)
-		pass
-		#self.oc.eval('predictFace')
-		#face_pred = self.oc.pull('face_pred')
-		#cv2.putText(color_image, str(face_pred[0]), (d.x, d.y - 10), cv2.FONT_HERSHEY_SIMPLEX, 2, 255)
-		#print str(face_pred) + " at " + str(d.x) + ", " + str(d.y)
+		if not self.options.nonn:
+		    cv_image = self.bridge.imgmsg_to_cv2(d.image)
+		    cw, ch = cv_image.shape[1::-1] # note image shape is h, w, d; reverse (h, w)->(w, h)
+		    x = np.reshape(cv_image, (1, cw * ch))[0]
+		    self.oc.push('x', x)
+		    #pass
+		    self.oc.eval('predictFace')
+		    face_pred = self.oc.pull('face_pred')
+		    cv2.putText(color_image, str(face_pred[0]), (d.x, d.y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, Color.WHITE)
+		    print str(face_pred) + " at " + str(d.x) + ", " + str(d.y)
 
 	    # highlight unrecognized face in red
 	    u, self.last_unrecognized_face = self.last_unrecognized_face, None
@@ -194,8 +203,13 @@ class AnnotateFaceNode(object):
 	    if r:
 		cv2.rectangle(color_image, (r.x, r.y), (r.x + r.w, r.y + r.h), Color.GREEN, 2)
 
-	    # TODO highlight target face in yellow
-	    t, self.last_target_face = self.last_target_face, None
+	    # highlight target face in yellow
+	    t = self.last_target_face
+	    if time.time() - self.last_target_face_ts > 2:
+	    	self.last_target_face = None
+	    if t:
+		cv2.rectangle(color_image, (t.x, t.y), (t.x + t.w, t.y + t.h), Color.YELLOW, 2)
+		cv2.putText(color_image, str(t.name) + "-" + str(t.id), (t.x + 2, t.y + 12), cv2.FONT_HERSHEY_SIMPLEX, 0.5, Color.WHITE)
 
 	    # republish the image to the output topic
 	    self.out_pub.publish(self.bridge.cv2_to_imgmsg(color_image, "bgr8"))
