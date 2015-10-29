@@ -39,11 +39,11 @@ class PanTilt:
 	return map(angle, 0, 100, 130, 190)
 
     def map_right_tilt_angle(self, angle):
-	return map(angle, 0, 100, 185, 125)
+	return map(angle, 0, 100, 125, 185)
 	#return map(angle, 0, 100, 165, 105)
 
     def map_pan_angle(self, angle):
-	return map(angle, 0, 100, 180, 70)
+	return map(angle, 0, 100, 90, 210)
 
 def map(value, domainLow, domainHigh, rangeLow, rangeHigh):
     return ((value - domainLow) / (domainHigh - domainLow)) * (rangeHigh - rangeLow) + rangeLow
@@ -105,11 +105,11 @@ def publish_joint_state():
     joint_state = JointState()
     joint_state.header.stamp = rospy.Time.now()
 
-    joint_state.name.append('torso_neck_joint') # pan
+    joint_state.name.append('upper_neck_head_joint') # pan
     joint_state.position.append(pan_angle)
     joint_state.velocity.append(0)
 
-    joint_state.name.append('upper_neck_head_joint') # tilt
+    joint_state.name.append('torso_neck_joint') # tilt
     joint_state.position.append(tilt_angle)
     joint_state.velocity.append(0)
 

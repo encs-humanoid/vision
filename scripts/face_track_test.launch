@@ -22,8 +22,10 @@
 		</node>
 		<node name="republish_annotated" pkg="image_transport" type="republish"
 			args="raw in:=/stereo/left/image_annotated_raw compressed out:=/stereo/left/image_annotated"/>
+			<!--
 		<node name="image_view_annotated" pkg="image_view" type="image_view"
 			args="image:=/stereo/left/image_annotated _image_transport:=compressed"/>
+			-->
         </group>
 
         <group ns="/stereo/right">
@@ -48,8 +50,10 @@
 		</node>
 		<node name="republish_annotated" pkg="image_transport" type="republish"
 			args="raw in:=/stereo/right/image_annotated_raw compressed out:=/stereo/right/image_annotated"/>
+			<!--
 		<node name="image_view_annotated" pkg="image_view" type="image_view"
 			args="image:=/stereo/right/image_annotated _image_transport:=compressed"/>
+			-->
         </group>
 
 </launch>

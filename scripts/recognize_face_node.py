@@ -24,6 +24,7 @@ from time import sleep
 import argparse
 import atexit
 import cv2
+import face_util
 import Image
 import glob
 import heapq
@@ -128,7 +129,7 @@ class RecognizeFaceNode(object):
 	if control_msg.data == "stop_face_recognition":
 	    self.is_recognizing = False
 	    rospy.loginfo("stopped face recognition")
-	elif contro_msg.data == "resume_face_recognition":
+	elif control_msg.data == "resume_face_recognition":
 	    self.is_recognizing = True
 	    rospy.loginfo("resumed face recognition")
 
@@ -163,7 +164,7 @@ class RecognizeFaceNode(object):
 
     def recognize_face(self, face):
 	cv_image = self.bridge.imgmsg_to_cv2(face.image)
-	test_bits = set(get_pixelprint(cv_image))
+	test_bits = set(face_util.get_pixelprint(cv_image))
 	
 	num_top_matches = 150
 	heap = [] # will store heap of tuples (overlap, Match)
@@ -254,18 +255,6 @@ def read_known_people(path, filename):
     return names
 
 
-def get_pixelprint(cv_crop, bits_per_pixel=50):
-    cw, ch = cv_crop.shape[1::-1] # note image shape is h, w, d; reverse (h, w)->(w, h)
-    bits = []
-    for px in xrange(cw):
-	for py in xrange(ch):
-	    i = int(max(1, min(int(cv_crop[px][py]), 250) / 5))  # Note:  5 * 50 = 250
-	    #bits.append((px*ch + py)*bits_per_pixel + i-1)
-	    bits.append((px*ch + py)*bits_per_pixel + i)
-	    #bits.append((px*ch + py)*bits_per_pixel + i+1)
-    return bits
-
-
 class Match:
     def __init__(self, overlap, encounter_id, filepath):
 	self.overlap = overlap
@@ -307,6 +296,7 @@ class Processor(multiprocessing.Process):
 
 
     def run(self):
+    	valid_encounter_threshold = 65
     	os.chdir(self.cwd)
 	try:
 	    while True:
@@ -322,12 +312,18 @@ class Processor(multiprocessing.Process):
 			min_overlap = int(fields[4])
 			db_image = Image.open(db_file)
 			cv_image = np.array(db_image, dtype=np.float32)
-			db_bits = set(get_pixelprint(cv_image))
-			self.image_database.append(DBImage(db_file, encounter_id, max_overlap, avg_overlap, min_overlap, db_bits))
+			db_bits = set(face_util.get_pixelprint(cv_image))
+			# min_overlap < 65 usually implies a bad image in the database, which
+			# can hamper recognition.  exclude any encounters with a low minimum
+			if min_overlap >= valid_encounter_threshold:
+			    self.image_database.append(DBImage(db_file, encounter_id, max_overlap, avg_overlap, min_overlap, db_bits))
 			#print "added encounter " + str(encounter_id) + " file " + db_file
 		    elif isinstance(db_object, LearnedFace):
 			f = db_object
-			self.image_database.append(DBImage(f.filepath, f.encounter_id, f.max_overlap, f.avg_overlap, f.min_overlap, f.bits))
+			# min_overlap < 65 usually implies a bad image in the database, which
+			# can hamper recognition.  exclude any encounters with a low minimum
+			if f.min_overlap >= valid_encounter_threshold:
+			    self.image_database.append(DBImage(f.filepath, f.encounter_id, f.max_overlap, f.avg_overlap, f.min_overlap, f.bits))
 			#print "added encounter " + str(f.encounter_id) + " file " + f.filepath
 		    continue
 		except Queue.Empty, e:
@@ -340,8 +336,8 @@ class Processor(multiprocessing.Process):
 			break
 		    for item in self.image_database:
 			overlap = len(item.fp & test_bits)
-			# limit the results to matches which exceed the average overlap of the face encounter
-			if overlap >= item.avg_overlap:
+			# limit the results to matches which exceed a threshold relative to the face encounter
+			if overlap >= (item.avg_overlap + item.min_overlap) / 2:
 			    self.output_queue.put(Match(overlap, item.encounter_id, item.filepath))
 		    self.output_queue.put(None)
 		except Queue.Empty, e:

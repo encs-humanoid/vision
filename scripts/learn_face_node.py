@@ -23,6 +23,7 @@ from cv_bridge import CvBridge, CvBridgeError
 import argparse
 import atexit
 import cv2
+import face_util
 import Image
 import numpy as np
 import os
@@ -32,27 +33,12 @@ import sensor_msgs.msg
 import sys
 
 
-### TODO 
-### compute the average encounter overlap and store
-### publish message to notify recognizer of a new encounter
-
-
-def get_pixelprint(cv_crop, bits_per_pixel=50):
-    cw, ch = cv_crop.shape[1::-1] # note image shape is h, w, d; reverse (h, w)->(w, h)
-    bits = []
-    for px in xrange(cw):
-	for py in xrange(ch):
-	    i = int(max(1, min(int(cv_crop[px][py]), 250) / 5))  # Note:  5 * 50 = 250
-	    bits.append((px*ch + py)*bits_per_pixel + i)
-    return bits
-
-
 # The upper limit for the encounter id.  These are assigned randomly,
 # so two unrelated encounters may get the same id.  It is expected that
 # an individual will have several encounters during face learning, and 
 # it is the combination of several random encounter ids, not the individual
 # id that is used to identify a person.
-MAX_ENCOUNTER_ID = 2000
+MAX_ENCOUNTER_ID = 10000
 
 
 class FaceEncounter(object):
@@ -184,7 +170,7 @@ class FaceEncounter(object):
 	if face_index in self.bits_cache:
 	    return self.bits_cache[face_index]
 	cv_image = bridge.imgmsg_to_cv2(self.faces[face_index].image)
-	bits = set(get_pixelprint(cv_image))
+	bits = set(face_util.get_pixelprint(cv_image))
 	self.bits_cache[face_index] = bits
 	return bits
 

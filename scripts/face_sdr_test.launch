@@ -1,0 +1,40 @@
+<launch>
+
+	<node name="republish_decomp" pkg="image_transport" type="republish"
+		args="compressed in:=/camera/image _image_transport:=compressed raw out:=/camera/image_raw"/>
+	
+	<node name="detect_face" pkg="vision" type="face_detect_node.py" cwd="node" args="-o detected_faces">
+		<param name="in" value="/camera/image_raw" />
+		<param name="out" value="/detected_face" />
+	</node>
+
+	<node name="recognize_face_node" pkg="vision" type="recognize_face_node.py" args="" cwd="node">
+		<param name="min_match" value="10"/>
+		<param name="min_processes" value="4"/>
+		<param name="facedb" value="facedb"/>
+	</node>
+
+	<node name="learn_face_node" pkg="vision" type="learn_face_node.py" args="" cwd="node">
+		<param name="delta_xy_px" value="20"/>
+		<param name="delta_t_ms" value="1000"/>
+		<param name="facedb" value="facedb"/>
+	</node>
+
+	<node name="ai_respond_node" pkg="ai" type="ai_respond_node.py" cwd="node">
+		<param name="min_match" value="9"/>
+	</node>
+
+	<node name="annotate_face_node" pkg="vision" type="annotate_face_node.py" cwd="node" args="--nonn">
+		<param name="image" value="/camera/image_raw" />
+		<param name="detected" value="/detected_face" />
+		<param name="out" value="/camera/image_annotated_raw" />
+	</node>
+
+	<node name="republish_annotated" pkg="image_transport" type="republish"
+		args="raw in:=/camera/image_annotated_raw compressed out:=/camera/image_annotated"/>
+
+	<node name="image_view_annotated" pkg="image_view" type="image_view"
+		args="image:=/camera/image_annotated _image_transport:=compressed"/>
+
+</launch>
+
