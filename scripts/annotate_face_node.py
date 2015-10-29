@@ -207,9 +207,9 @@ class AnnotateFaceNode(object):
 
 	    # highlight target face in yellow
 	    t = self.last_target_face
-	    if time.time() - self.last_target_face_ts > 2:
-	    	self.last_target_face = None
-	    if t:
+	    if t and self.frame_id == t.header.frame_id:
+		if time.time() - self.last_target_face_ts > 2:
+		    self.last_target_face = None
 		cv2.rectangle(color_image, (t.x, t.y), (t.x + t.w, t.y + t.h), Color.YELLOW, 2)
 		cv2.putText(color_image, str(t.name) + "-" + str(t.id), (t.x + 2, t.y + 12), cv2.FONT_HERSHEY_SIMPLEX, 0.5, Color.WHITE)
 
