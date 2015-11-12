@@ -179,13 +179,24 @@ def overlap(files, i, j):
 
 cache = {}
 
-def get_bits(filename):
+def get_bits(filename, use_orig=False):
     global cache
     if filename in cache:
 	return cache[filename]
-    image = Image.open(filename)
-    cv_image = np.array(image, dtype=np.float32)
-    bits = set(get_pixelprint(cv_image))
+    sdr_filename = filename.replace(".png", ".sdr")
+    if os.path.exists(sdr_filename):
+    	with open(sdr_filename, "r") as f:
+	    lines = f.readlines()
+	bits = set(eval(lines[0]))
+    else:
+	image = Image.open(filename)
+	cv_image = np.array(image, dtype=np.float32)
+	if use_orig:  # use original pixel intensity algorithm
+	    bits = set(get_pixelprint_orig(cv_image))
+	else:  # use new feature based algorithm
+	    bits = set(get_pixelprint(cv_image))
+	with open(sdr_filename, "w") as f:
+	    f.write(str(sorted(bits)))
     cache[filename] = bits
     return bits
 

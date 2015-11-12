@@ -38,7 +38,7 @@ import sys
 # an individual will have several encounters during face learning, and 
 # it is the combination of several random encounter ids, not the individual
 # id that is used to identify a person.
-MAX_ENCOUNTER_ID = 10000
+MAX_ENCOUNTER_ID = 2000000000
 
 
 class FaceEncounter(object):

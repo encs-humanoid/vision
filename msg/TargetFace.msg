@@ -6,3 +6,5 @@ uint32 h		# the height of the face image
 uint32[] encounter_ids	# array of ids of top matching face encounters
 string name		# name of target face, if known
 uint32 id		# id of the target face
+string recog_name	# name of the recognized face if different from current target
+uint32 recog_id		# id of the recognized face if different from current target

@@ -17,51 +17,96 @@
 
 from __future__ import division
 from vision.msg import DetectedFace
+from vision.msg import RecognizedFace
+from vision.msg import TargetFace
 from cv_bridge import CvBridge, CvBridgeError
 import argparse
 import atexit
 import cv2
+import facedb
 import Image
 import numpy as np
+import random
 import rospy
 import sensor_msgs.msg
 import sys
+import time
 
 class PubFaceNode(object):
-    def __init__(self):
+    def __init__(self, output_topic, recog_topic, unrec_topic, options=None):
 	rospy.init_node('pub_face_node', anonymous=True)
 
+	self.output_topic = output_topic
+	self.recog_topic = recog_topic
+	self.unrec_topic = unrec_topic
+
+	self.options = options
+
 	self.bridge = CvBridge()
+	self.received_recog_face = False
+	self.received_unrec_face = False
+	self.recognized_face = None
+	self.unrecognized_face = None
 
-	myargs = rospy.myargv(sys.argv) # process ROS args and return the rest
-	parser = argparse.ArgumentParser(description="Publish face messages given file names")
-	parser.add_argument("-f", "--facedb", dest="facedb", default="facedb", metavar="DIRECTORY", help="base directory to resolve file names to files")
-	self.options = parser.parse_args(myargs[1:])
-
-	self.output_topic = rospy.get_param('~out', "/detected_face")
-	rospy.loginfo('Parameter %s has value %s', rospy.resolve_name('~out'), self.output_topic)
-
+	#rospy.Subscriber(self.recog_topic, TargetFace, self.on_recognized_face)
+	if "target" in self.recog_topic:
+	    rospy.Subscriber(self.recog_topic, TargetFace, self.on_recognized_face)
+	else:
+	    rospy.Subscriber(self.recog_topic, RecognizedFace, self.on_recognized_face)
+	rospy.Subscriber(self.unrec_topic, DetectedFace, self.on_unrecognized_face)
 	self.face_pub = rospy.Publisher(self.output_topic, DetectedFace, queue_size=5)
 	self.face_img_pub = rospy.Publisher(self.output_topic + "/image", sensor_msgs.msg.Image, queue_size=5)
+    	self.rate = rospy.Rate(100)  # 100 Hz
+
+
+    def on_recognized_face(self, recognized_face):
+    	print 'received recognized face'
+    	self.received_recog_face = True
+	#self.recognized_id = target_face.recog_id
+	self.recognized_face = recognized_face
+
+
+    def on_unrecognized_face(self, detected_face):
+    	print 'received unrecognized face'
+    	self.received_unrec_face = True
+	self.unrecognized_face = detected_face
+	#self.recognized_id = None
 
 
     def run(self):
-    	line = raw_input()
-	while line:
-	    filename = self.options.facedb + "/" + line.strip()
-	    self.publish_face(filename)
+    	if self.options.all:
+	    self.rate.sleep()
+	    time.sleep(3)  # allow time for subscribers to connect
+	    self.rate.sleep()
+	    fdb = facedb.FaceDB(self.options.facedb)
+	    for encounter in fdb.iterate_unique():
+	    	# generate random coordinates for the encounter
+		x = random.randrange(0, 570)
+		y = random.randrange(0, 370)
+		for face in encounter.iterate():
+		    self.publish_face(face.image_file, x, y)
+		    # wait for recognition response before sending next face
+		    # to avoid faces being dropped by the recognize face node
+		    self.wait_for_recognition()
+		    #if self.received_recog_face:
+			#rospy.loginfo('Recognized ' + face.image_file + " as " + str(self.recognized_id))
+	else:
 	    line = raw_input()
+	    while line:
+		filename = self.options.facedb + "/" + line.strip()
+		self.publish_face(filename)
+		line = raw_input()
 
 
-    def publish_face(self, filename):
+    def publish_face(self, filename, x=0, y=0):
     	#try:
 	db_image = Image.open(filename)
 	if db_image:
 	    cv_image = np.array(db_image, dtype=np.float32)
 	    ros_image = self.bridge.cv2_to_imgmsg(cv_image, encoding="32FC1")
 	    detected_face = DetectedFace()
-	    detected_face.x = 0
-	    detected_face.y = 0
+	    detected_face.x = x
+	    detected_face.y = y
 	    detected_face.w = 30
 	    detected_face.h = 30
 	    detected_face.left_eye_x = 1
@@ -86,16 +131,40 @@ class PubFaceNode(object):
 	#    rospy.loginfo('Failed to open image file ' + filename)
 
 
+    def wait_for_recognition(self):
+	self.received_recog_face = False
+	self.received_unrec_face = False
+	while not rospy.is_shutdown():
+	    if self.received_recog_face or self.received_unrec_face:
+		break
+	    self.rate.sleep()
+	if rospy.is_shutdown():
+	    raise rospy.ROSInterruptException()
+
+
     def on_exit(self):
-    	pass
+    	print 'exiting'
+    	sys.exit(1)
 
 
 if __name__ == '__main__':
     try:
-	node = PubFaceNode()
+	myargs = rospy.myargv(sys.argv) # process ROS args and return the rest
+	parser = argparse.ArgumentParser(description="Publish face messages given file names")
+	parser.add_argument("-f", "--facedb", dest="facedb", default="facedb", metavar="DIRECTORY", help="base directory to resolve file names to files")
+	parser.add_argument("--all", help="publish all faces in facedb", action="store_true")
+	options = parser.parse_args(myargs[1:])
 
+	output_topic = rospy.get_param('~out', '/detected_face')
+	recog_topic = rospy.get_param('~recog', '/target_face')
+	unrec_topic = rospy.get_param('~unrec', '/unrecognized_face')
+	rospy.loginfo('Parameter %s has value %s', rospy.resolve_name('~out'), output_topic)
+	rospy.loginfo('Parameter %s has value %s', rospy.resolve_name('~recog'), recog_topic)
+	rospy.loginfo('Parameter %s has value %s', rospy.resolve_name('~unrec'), unrec_topic)
+
+	node = PubFaceNode(output_topic, recog_topic, unrec_topic, options)
 	atexit.register(node.on_exit)
 	node.run()
     except rospy.ROSInterruptException:
-	pass
+	sys.exit(1)
 

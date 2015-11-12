@@ -53,8 +53,9 @@ class RecognizeFaceNode(object):
 	control_topic = self.get_param('~in_control', '/control')
 	rec_topic = self.get_param('~out_rec', '/recognized_face')
 	unrec_topic = self.get_param('~out_unrec', '/unrecognized_face')
-	self.min_match = int(self.get_param('~min_match', '5'))
+	self.min_match = int(self.get_param('~min_match', '1'))
 	self.max_processes = int(self.get_param('~max_processes', '4'))
+	self.threshold = int(self.get_param('~threshold', '200'))
 	self.facedb_path = self.get_param('~facedb', 'facedb')
 
 	self.start_processors()
@@ -76,8 +77,8 @@ class RecognizeFaceNode(object):
 
 
     def start_processors(self):
-	num_processors = min(multiprocessing.cpu_count(), self.max_processes)
-	self.processors = [Processor() for i in xrange(num_processors)]
+	num_processors = min(multiprocessing.cpu_count() * 2, self.max_processes)
+	self.processors = [Processor(self.threshold) for i in xrange(num_processors)]
 	self.processes = []
 	for w in self.processors:
 	    self.processes.append(w)
@@ -273,7 +274,7 @@ class DBImage:
 
 
 class Processor(multiprocessing.Process):
-    def __init__(self):
+    def __init__(self, threshold):
 	multiprocessing.Process.__init__(self)
 	self.db_queue = multiprocessing.Queue()
 	self.input_queue = multiprocessing.Queue()
@@ -281,6 +282,7 @@ class Processor(multiprocessing.Process):
 	self._has_more = False
 	self.cwd = os.getcwd()
 	self.image_database = []
+	self.threshold = threshold
 
 
     def reset(self):
@@ -337,7 +339,9 @@ class Processor(multiprocessing.Process):
 		    for item in self.image_database:
 			overlap = len(item.fp & test_bits)
 			# limit the results to matches which exceed a threshold relative to the face encounter
-			if overlap >= (item.avg_overlap + item.min_overlap) / 2:
+			#if overlap >= (item.avg_overlap + item.min_overlap) / 2:
+			# Use absolute threshold to filter recognized vs. not
+			if overlap >= self.threshold:
 			    self.output_queue.put(Match(overlap, item.encounter_id, item.filepath))
 		    self.output_queue.put(None)
 		except Queue.Empty, e:

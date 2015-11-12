@@ -209,9 +209,12 @@ class AnnotateFaceNode(object):
 	    t = self.last_target_face
 	    if time.time() - self.last_target_face_ts > 2:
 	    	self.last_target_face = None
-	    if t:
+	    if t and t.id == t.recog_id:
 		cv2.rectangle(color_image, (t.x, t.y), (t.x + t.w, t.y + t.h), Color.YELLOW, 2)
 		cv2.putText(color_image, str(t.name) + "-" + str(t.id), (t.x + 2, t.y + 12), cv2.FONT_HERSHEY_SIMPLEX, 0.5, Color.WHITE)
+	    elif t:
+		cv2.rectangle(color_image, (t.x, t.y), (t.x + t.w, t.y + t.h), Color.GREEN, 2)
+		cv2.putText(color_image, str(t.recog_name) + "-" + str(t.recog_id), (t.x + 2, t.y + 12), cv2.FONT_HERSHEY_SIMPLEX, 0.5, Color.GREEN)
 
 	    # republish the image to the output topic
 	    self.out_pub.publish(self.bridge.cv2_to_imgmsg(color_image, "bgr8"))
