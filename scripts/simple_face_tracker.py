@@ -35,6 +35,7 @@ import argparse
 import atexit
 import cv2
 from math import pi
+import numpy.random
 import rospy
 import sensor_msgs.msg
 import std_msgs.msg
@@ -75,10 +76,13 @@ class SimpleFaceTracker(object):
 
 	self.max_no_face_staring_time_sec = float(self.get_param("~max_no_face_staring_time_sec", "2.0"))
 	# maximum seconds to wait for target to be reached before selecting a new target
-	self.max_target_time_sec = float(self.get_param("~max_target_time_sec", "2.0"))
+	self.max_target_time_sec = float(self.get_param("~max_target_time_sec", "10.0"))
 
 	#  target achieved threshold in radians (parameter specified in degrees)
-	self.pose_target_achieved_rad = (pi / 180.0) * float(self.get_param("~pose_target_achieved_deg", "10.0"))
+	self.pose_target_achieved_rad = (pi / 180.0) * float(self.get_param("~pose_target_achieved_deg", "2.0"))
+	# max time to hold the target pose
+	self.pose_target_hold_sec = float(self.get_param("~pose_target_hold_sec", "2.0"))
+	self.pose_target_achieved_time = 0  # the time the target was achieved - used to determine the hold time
 	self.tilt_joint = self.get_param("~tilt_joint", "torso_neck_joint")
 	self.pan_joint = self.get_param("~pan_joint", "upper_neck_head_joint")
 
@@ -152,7 +156,7 @@ class SimpleFaceTracker(object):
 
 		# if no face in view, look straight
 		if not self.is_face_in_view() and self.is_tracking:
-		    self.look_straight()
+		    self.look_around()
 	except KeyboardInterrupt:
 	    pass
 
@@ -224,33 +228,55 @@ class SimpleFaceTracker(object):
 	return joy
 
 
-    def look_straight(self):
+    def look_around(self):
     	'''
 	Cause the robot to look around, rather than remaining stuck in a static pose.
 
-	To do this, select a target pose.  Currently this is the (0,0) straight forward looking pose.
+	To do this, select a target pose.
 	Determine the direction vector from the current pose to the target pose and send a joystick
 	message to move the head in the desired direction.
 	If sufficient time has passed since the selection of the previous target pose, or the
-	current pose is near enough the target, then select a new target pose and repeat.
+	current pose is near enough the target and the target pose hold time has elapsed, then
+	select a new target pose and repeat.
 	'''
-	if time.time() - self.look_straight_target_selected_time >= self.max_target_time_sec:
-	    self.select_look_straight_target()
+	# check if we have spent enough time on this target pose
+	now = time.time()
+	if now - self.look_straight_target_selected_time >= self.max_target_time_sec:
+	    rospy.loginfo('Timed out attempting target pose')
+	    self.select_look_around_target()
+	# check if the target pose has been held for sufficient time
+	elif self.pose_target_achieved_time > 0 and now - self.pose_target_achieved_time >= self.pose_target_hold_sec:
+	    rospy.loginfo('Target pose held until ' + str(now))
+	    self.select_look_around_target()
+	    self.pose_target_achieved_time = 0
+	# check if the target pose has been achieved, and store the time
 	elif self.max_pose_deviation_from_target_rad() <= self.pose_target_achieved_rad:
-	    self.select_look_straight_target()
+	    if self.pose_target_achieved_time == 0:
+		rospy.loginfo('Target pose achieved at ' + str(now))
+		self.pose_target_achieved_time = now
 	
 	# calculate the direction to the target pose and send a joystick message
 	iw, ih = pi, pi   # no particular meaning to these, but they work empirically
 	fx, fy = self.pose[self.pan_joint], self.pose[self.tilt_joint]
 	jx = self.gain * (iw * self.pose_target[self.pan_joint] - fx) / iw
 	jy = 3 * self.gain * (ih * self.pose_target[self.tilt_joint] - fy) / ih
-	#print "look_straight " + str(jx) + ", " + str(jy) + ", pose=" + str(self.pose)
+	#print "look_around " + str(jx) + ", " + str(jy) + ", pose=" + str(self.pose)
 	self.joy_pub.publish(self.new_joy_message(jx, jy))
 
 
-    def select_look_straight_target(self):
-    	# TODO change to look_around and select new random target from a 2D normal distribution centered at (0,0)
-	self.pose_target = {self.pan_joint: 0.0, self.tilt_joint: 0.0}
+    def select_look_around_target(self):
+   	# select new random target from a 2D normal distribution centered at (0,0)
+	# covariance selected to keep pan joint in [-0.15, 0.15] and tilt joint in [-0.05, 0.05]
+	# which were determined empirically to be satisfactory values
+	# 0.0025 = (0.15 / 3) ** 2
+	# 0.000256 = (0.048 / 3) ** 2
+	t = numpy.random.multivariate_normal([0, 0], [[0.0025, 0], [0, 0.000256]])
+	# TEMP read pose from file
+	#with open('target_pose.txt', 'r') as f:
+	#    lines = f.readlines()
+	#t = [float(v) for v in lines[0].split()]
+	self.pose_target = {self.pan_joint: t[0], self.tilt_joint: t[1]}
+        rospy.loginfo('Target pose set to ' + str(self.pose_target))
 	self.look_straight_target_selected_time = time.time()
 
 
