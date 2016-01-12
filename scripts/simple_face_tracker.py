@@ -127,10 +127,13 @@ class SimpleFaceTracker(object):
 
 
     def on_joints(self, joint_state):
-    	self.last_joint_state = joint_state
-	self.pose = {}
+	pose = {}
 	for i in range(len(joint_state.name)):
-	    self.pose[joint_state.name[i]] = joint_state.position[i]
+	    pose[joint_state.name[i]] = joint_state.position[i]
+	# assign to self.pose in a single statement to avoid multithreading issue
+	# (KeyError) with an incomplete dict
+	self.pose = pose
+    	self.last_joint_state = joint_state
 
 
     def run(self):
