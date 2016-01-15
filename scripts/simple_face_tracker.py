@@ -271,9 +271,16 @@ class SimpleFaceTracker(object):
    	# select new random target from a 2D normal distribution centered at (0,0)
 	# covariance selected to keep pan joint in [-0.15, 0.15] and tilt joint in [-0.05, 0.05]
 	# which were determined empirically to be satisfactory values
+	# TODO make these values part of the robot instance configuration
+	# 3 stdev
 	# 0.0025 = (0.15 / 3) ** 2
 	# 0.000256 = (0.048 / 3) ** 2
-	t = numpy.random.multivariate_normal([0, 0], [[0.0025, 0], [0, 0.000256]])
+	# 2 stdev
+	# 0.005625 = (0.15 / 2) ** 2
+	# 0.000625 = (0.05 / 2) ** 2
+	t = numpy.random.multivariate_normal([0, 0], [[0.005625, 0], [0, 0.000625]])
+	t[0] = min(max(t[0], -0.15), 0.15)
+	t[1] = min(max(t[1], -0.05), 0.05)
 	# TEMP read pose from file
 	#with open('target_pose.txt', 'r') as f:
 	#    lines = f.readlines()
