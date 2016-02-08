@@ -53,9 +53,9 @@ class RecognizeFaceNode(object):
 	control_topic = self.get_param('~in_control', '/control')
 	rec_topic = self.get_param('~out_rec', '/recognized_face')
 	unrec_topic = self.get_param('~out_unrec', '/unrecognized_face')
-	self.min_match = int(self.get_param('~min_match', '3'))
+	self.min_match = int(self.get_param('~min_match', '4'))
 	self.max_processes = int(self.get_param('~max_processes', '4'))
-	self.threshold = int(self.get_param('~threshold', '250'))
+	self.threshold = int(self.get_param('~threshold', '270'))
 	self.facedb_path = self.get_param('~facedb', 'facedb')
 
 	self.start_processors()
