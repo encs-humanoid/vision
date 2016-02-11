@@ -5,12 +5,15 @@
 # Copyright 2015, IEEE ENCS Humanoid Robot Project
 #===================================================================
 from __future__ import division
+from align_face import CropFace
 import csv
 import glob
 import Image
 import numpy as np
 import os
+import rospy
 from scipy import sparse
+import vision.msg
 
 
 features = np.matrix([
@@ -236,6 +239,57 @@ def write_dataset(directory):
 		# write out the X.csv and y.csv files for the dataset
 		X_writer.writerow(pixels)
 		y_writer.writerow([y_map[png_file.split("/")[-2]]])
+
+
+def crop_and_normalize(face_only_gray, eyes, target_intensity=95, target_range=150, offset_pct=(0.2,0.2), dest_sz=(30,30)):
+    left_eye = min(eyes)
+    right_eye = max(eyes)
+    el_center = get_center(left_eye)
+    er_center = get_center(right_eye)
+
+    # Align eyes and crop image
+    image = Image.fromarray(face_only_gray)
+    crop = CropFace(image, eye_left=el_center, eye_right=er_center, offset_pct=offset_pct, dest_sz=dest_sz)
+    cv_crop = np.array(crop, dtype=np.float32)
+
+    # Normalize intensity
+    average_intensity = int(np.mean(cv_crop))
+    max_intensity = np.max(cv_crop)
+    min_intensity = np.min(cv_crop)
+    cv_crop = (cv_crop - average_intensity) * (target_range / max(1.0, max_intensity - min_intensity)) + target_intensity
+
+    return cv_crop, left_eye, right_eye
+
+
+# given rectangle (x, y, w, h) return the center point (cx, cy)
+def get_center(rect):
+    (x, y, w, h) = rect
+    return (x + w/2, y + h/2)
+
+
+def create_detected_face_msg(bridge, x, y, w, h, left_eye, right_eye, cv_crop, ros_image):
+    detected_face = vision.msg.DetectedFace()
+    detected_face.x = x
+    detected_face.y = y
+    detected_face.w = w
+    detected_face.h = h
+    detected_face.left_eye_x = left_eye[0]
+    detected_face.left_eye_y = left_eye[1]
+    detected_face.left_eye_w = left_eye[2]
+    detected_face.left_eye_h = left_eye[3]
+    detected_face.right_eye_x = right_eye[0]
+    detected_face.right_eye_y = right_eye[1]
+    detected_face.right_eye_w = right_eye[2]
+    detected_face.right_eye_h = right_eye[3]
+    face_image = bridge.cv2_to_imgmsg(cv_crop, encoding="32FC1")
+    # copy the header info from the original image to the cutout face image
+    face_image.header.seq = ros_image.header.seq
+    face_image.header.stamp = ros_image.header.stamp
+    face_image.header.frame_id = ros_image.header.frame_id
+    detected_face.image = face_image
+    detected_face.header.stamp = rospy.Time.now()
+    detected_face.header.frame_id = ros_image.header.frame_id
+    return detected_face
 
 
 if __name__ == '__main__':

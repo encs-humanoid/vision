@@ -23,12 +23,12 @@
 #===================================================================
 
 from __future__ import division
-from align_face import CropFace
 from vision.msg import DetectedFace
 from cv_bridge import CvBridge, CvBridgeError
 import argparse
 import atexit
 import cv2
+import face_util
 import Image
 import numpy as np
 import rospy
@@ -121,9 +121,9 @@ class FaceDetectNode(object):
 			cv2.rectangle(color_image, (x+ex, y+ey), (x+ex+ew, y+ey+eh), (0, 255, 0), 2)
 
 		if len(eyes) == 2:
-		    cv_crop, left_eye, right_eye = crop_and_normalize(face_only_gray, eyes)
+		    cv_crop, left_eye, right_eye = face_util.crop_and_normalize(face_only_gray, eyes)
 		    
-		    detected_face = self.create_detected_face_msg(x, y, w, h, left_eye, right_eye, cv_crop, ros_image)
+		    detected_face = face_util.create_detected_face_msg(self.bridge, x, y, w, h, left_eye, right_eye, cv_crop, ros_image)
 	
 		    self.face_pub.publish(detected_face)
 
@@ -146,31 +146,6 @@ class FaceDetectNode(object):
 	    print e
 
 
-    def create_detected_face_msg(self, x, y, w, h, left_eye, right_eye, cv_crop, ros_image):
-	detected_face = DetectedFace()
-	detected_face.x = x
-	detected_face.y = y
-	detected_face.w = w
-	detected_face.h = h
-	detected_face.left_eye_x = left_eye[0]
-	detected_face.left_eye_y = left_eye[1]
-	detected_face.left_eye_w = left_eye[2]
-	detected_face.left_eye_h = left_eye[3]
-	detected_face.right_eye_x = right_eye[0]
-	detected_face.right_eye_y = right_eye[1]
-	detected_face.right_eye_w = right_eye[2]
-	detected_face.right_eye_h = right_eye[3]
-	face_image = self.bridge.cv2_to_imgmsg(cv_crop, encoding="32FC1")
-	# copy the header info from the original image to the cutout face image
-	face_image.header.seq = ros_image.header.seq
-	face_image.header.stamp = ros_image.header.stamp
-	face_image.header.frame_id = ros_image.header.frame_id
-	detected_face.image = face_image
-	detected_face.header.stamp = rospy.Time.now()
-	detected_face.header.frame_id = ros_image.header.frame_id
-	return detected_face
-
-
     def find_faces(self, gray_image):
 	faces = self.face_cascade.detectMultiScale(
 	    gray_image,
@@ -190,32 +165,6 @@ class FaceDetectNode(object):
 		    flags=cv2.cv.CV_HAAR_SCALE_IMAGE
 	)
 	return eyes
-
-
-def crop_and_normalize(face_only_gray, eyes, target_intensity=95, target_range=150, offset_pct=(0.2,0.2), dest_sz=(30,30)):
-    left_eye = min(eyes)
-    right_eye = max(eyes)
-    el_center = get_center(left_eye)
-    er_center = get_center(right_eye)
-
-    # Align eyes and crop image
-    image = Image.fromarray(face_only_gray)
-    crop = CropFace(image, eye_left=el_center, eye_right=er_center, offset_pct=offset_pct, dest_sz=dest_sz)
-    cv_crop = np.array(crop, dtype=np.float32)
-
-    # Normalize intensity
-    average_intensity = int(np.mean(cv_crop))
-    max_intensity = np.max(cv_crop)
-    min_intensity = np.min(cv_crop)
-    cv_crop = (cv_crop - average_intensity) * (target_range / max(1.0, max_intensity - min_intensity)) + target_intensity
-
-    return cv_crop, left_eye, right_eye
-
-
-# given rectangle (x, y, w, h) return the center point (cx, cy)
-def get_center(rect):
-    (x, y, w, h) = rect
-    return (x + w/2, y + h/2)
 
 
 if __name__ == '__main__':

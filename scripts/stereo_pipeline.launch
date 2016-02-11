@@ -1,0 +1,18 @@
+<launch>
+    <group ns="/stereo">
+    	<node name="stereo_image_proc" pkg="stereo_image_proc" type="stereo_image_proc"
+		args="_approximate_sync:=True _queue_size:=50">
+	</node>
+    </group>
+
+    <group ns="/stereo/right">
+	<node name="ci_relay" pkg="topic_tools" type="relay" args="/stereo/right/camera/camera_info /stereo/right/camera_info">
+	</node>
+    </group>
+
+<!--
+    <node name="stereo_view" pkg="image_view" type="stereo_view"
+	args="stereo:=/stereo image:=image_rect_color _approximate_sync:=True">
+    </node>
+-->
+</launch>
