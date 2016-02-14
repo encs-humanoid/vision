@@ -51,7 +51,7 @@ class FaceEncounter(object):
 		    lines = f.readlines()
 		for line in [l.strip('\n') for l in lines]:
 		    tokens = line.split()
-		    image_file = tokens[0]
+		    image_file = os.path.join(self.encounter_folder, tokens[0].split('/')[-1])
 		    max_overlap = int(tokens[2])
 		    avg_overlap = int(tokens[3])
 		    min_overlap = int(tokens[4])
