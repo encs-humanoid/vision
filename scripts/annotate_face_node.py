@@ -88,6 +88,7 @@ class AnnotateFaceNode(object):
 	self.last_chessboard = None
 	self.last_chessboard_ts = time.time()
 	self.eye_alignment = None
+	self.colors = {}
 
 	#self.oc.load('face_model1.txt')
 
@@ -236,10 +237,18 @@ class AnnotateFaceNode(object):
 		# discard stored faces which are too old
 		self.faces = [f for f in self.faces if now_sec - f.header.stamp.to_sec() < 0.1]
 
-	    # highlight detected face in blue
+	    # highlight detected face in blue or random color if tracked
 	    if len(self.detected_faces) > 0:
+		rospy.loginfo('%d detected faces for frame %s', len(self.detected_faces), self.frame_id)
 	    	for d in self.detected_faces:
-		    cv2.rectangle(color_image, (d.x, d.y), (d.x + d.w, d.y + d.h), Color.BLUE, 2)
+		    #color = self.get_track_color(d.track)
+		    color = tuple(d.track_color)
+		    cv2.rectangle(color_image, (d.x, d.y), (d.x + d.w, d.y + d.h), color, 2)
+		    # draw eyes
+		    eyes = [(d.left_eye_x, d.left_eye_y, d.left_eye_w, d.left_eye_h), (d.right_eye_x, d.right_eye_y, d.right_eye_w, d.right_eye_h)]
+		    for (ex, ey, ew, eh) in eyes:
+			cv2.rectangle(color_image, (d.x + ex, d.y + ey), (d.x + ex + ew, d.y + ey + eh), color, 2)
+		    cv2.putText(color_image, str(d.track), (int(d.x + 0.5 * d.w - 7), int(d.y + 0.5 * d.h) + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color)
 		    if not self.options.nonn:
 			#cv_image = self.bridge.imgmsg_to_cv2(d.image)
 			#cw, ch = cv_image.shape[1::-1] # note image shape is h, w, d; reverse (h, w)->(w, h)
@@ -250,23 +259,27 @@ class AnnotateFaceNode(object):
 			#face_pred = self.oc.pull('face_pred')
 			#cv2.putText(color_image, str(face_pred[0]), (d.x, d.y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, Color.WHITE)
 			#print str(face_pred) + " at " + str(d.x) + ", " + str(d.y)
+		# TODO keep only the latest face for each track
 		self.detected_faces = [f for f in self.detected_faces if now_sec - f.header.stamp.to_sec() < 0.1]
 
 	    # highlight unrecognized face in red
-	    if len(self.unrecognized_faces) > 0:
+	    # TODO enable this again
+	    if False and len(self.unrecognized_faces) > 0:
 	    	for u in self.unrecognized_faces:
 		    cv2.rectangle(color_image, (u.x, u.y), (u.x + u.w, u.y + u.h), Color.RED, 2)
 		self.unrecognized_faces = [f for f in self.unrecognized_faces if now_sec - f.header.stamp.to_sec() < 0.1]
 
 	    # highlight recognized face in green
-	    if len(self.recognized_faces) > 0:
+	    # TODO enable this again
+	    if False and len(self.recognized_faces) > 0:
 	    	for r in self.recognized_faces:
 		    cv2.rectangle(color_image, (r.x, r.y), (r.x + r.w, r.y + r.h), Color.GREEN, 2)
 		# discard stored recognized faces which are too old
 		self.recognized_faces = [f for f in self.recognized_faces if now_sec - f.header.stamp.to_sec() < 0.5]
 
 	    # highlight target face in yellow
-	    if len(self.target_faces) > 0:
+	    # TODO enable this again
+	    if False and len(self.target_faces) > 0:
 	    	for t in self.target_faces:
 		    if t.id == t.recog_id:
 			cv2.rectangle(color_image, (t.x, t.y), (t.x + t.w, t.y + t.h), Color.YELLOW, 2)
@@ -288,6 +301,21 @@ class AnnotateFaceNode(object):
 	    self.out_pub.publish(self.bridge.cv2_to_imgmsg(color_image, "bgr8"))
 	except CvBridgeError, e:
 	    print e
+
+
+#    def get_track_color(self, track):
+#	color = Color.BLUE
+#	if track > 0:
+#	    if track in self.colors:
+#		color = self.colors[track]
+#	    else:
+#		# select a random color for the track
+#		color = tuple(np.random.randint(0, 255, 3).tolist())
+#		self.colors[track] = color
+#		for t in self.colors.keys():  # remove expired colors
+#		    if t < track - 10:  # only keep the last 10 track colors
+#			del self.colors[t]
+#	return color
 
 
 if __name__ == '__main__':

@@ -11,7 +11,6 @@
 #
 # Publishes To:
 # - /face			all faces found from haar cascade
-# - /face/image_raw		image pixels corresponding to face
 # - /chessboard			PointCloud of chessboard corners
 # - /detected_face		faces also having two detectable eyes
 # - /detected_face/image_raw	cropped and normalized image of face
@@ -19,7 +18,10 @@
 # - /joy			joystick commands for face tracking
 # - /eye_alignment		AlignEyes msg with offset and rotation
 #
-# This node implements a vision system capable of analyzing stereo
+# On exit:
+# - saves alignment to ./eye_alignment.p
+#
+# This node is part of a vision system capable of analyzing stereo
 # image streams for human faces, learning to recognize individual
 # people, publishing recognized person identifiers, and tracking
 # a target person.
@@ -29,19 +31,33 @@
 
 from __future__ import division
 from cv_bridge import CvBridge, CvBridgeError
-#import argparse
-#import atexit
+import atexit
 import cv2
 import face_util
 import geometry_msgs.msg
-#import Image
 import math
 import numpy as np
+import os
+import pickle
 import rospy
 import sensor_msgs.msg
 import std_msgs.msg
 import sys
 import vision.msg
+
+
+# To-Do List
+# annotate face node to show all detected face pairs simultaneously
+# eliminate face_detect_node
+# eliminate simple_face_tracker
+# TODO track face by recognition degree
+#   - TargetFace, if any
+#   - else, RecognizedFace, if any
+#   - else, DetectedFace, if any
+#   - else, Face, if any
+#   - else, look around
+# TODO publish total number of detected faces after matching
+# TODO move look around behavior from simple_face_tracker.py
 
 
 DEFAULT_FACE_CASCADE = "/usr/share/opencv/haarcascades/haarcascade_frontalface_default.xml"
@@ -104,6 +120,16 @@ class StereoFrame(object):
 	if self._right_image is None:
 	    self._right_image = bridge.imgmsg_to_cv2(self.right_ros_image, "bgr8")
     	return self._left_image, self._right_image
+
+
+    def get_left_ts(self):
+    	""" return the timestamp in seconds of the left image """
+	return self.left_ros_image.header.stamp.to_sec()
+
+
+    def get_right_ts(self):
+    	""" return the timestamp in seconds of the right image """
+	return self.right_ros_image.header.stamp.to_sec()
 
 
     def get_width(self):
@@ -213,7 +239,9 @@ class StereoVisionOptions(object):
 		eye_min_neighbors=5,
 		eye_min_size=(5, 5),
 		moving_avg_frames=20,
-		chessboard_size=(7, 6)):
+		chessboard_size=(7, 6),
+		delta_xy_px=20,
+		delta_t_ms=1000):
 	self.face_cascade = cv2.CascadeClassifier(face_cascade_path)
 	self.scale_factor = scale_factor
 	self.min_neighbors = min_neighbors
@@ -224,17 +252,57 @@ class StereoVisionOptions(object):
 	self.eye_min_size = eye_min_size
 	self.moving_avg_frames = moving_avg_frames
 	self.chessboard_size = chessboard_size
+	self.delta_xy_px = delta_xy_px
+	self.delta_t_ms = delta_t_ms
 
 
 class NormalizedFace(object):
-    def __init__(self, x, y, w, h, left_eye, right_eye, image):
+    def __init__(self, x, y, w, h, ts, left_eye, right_eye, image):
     	self.x = x
 	self.y = y
 	self.w = w
 	self.h = h
+	self.ts = ts
 	self.left_eye = left_eye
 	self.right_eye = right_eye
 	self.image = image
+	self.track = 0
+	self.track_color = (255, 0, 0)
+
+
+    def set_track(self, track):
+    	self.track = track
+
+
+class TrackedFace(object):
+
+    next_id = 1  # class variable for next tracked face id
+
+    def __init__(self, face, id=0):
+    	if id == 0:
+	    self.id = TrackedFace.next_id
+	    TrackedFace.next_id += 1
+	else:
+	    self.id = id
+	self.faces = [face]
+	self.color = tuple(np.random.randint(0, 255, 3).tolist())
+
+
+    def is_related_to(self, face, delta_xy_px, delta_t_ms):
+	prev = self.faces[-1]  # compare proximity with most recent tracked face
+	delta_x = abs(face.x - prev.x)
+	delta_y = abs(face.y - prev.y)
+	delta_w = abs(face.w - prev.w)
+	delta_h = abs(face.h - prev.h)
+	delta_t = abs((face.ts - prev.ts) * 1000)
+	if delta_x <= delta_xy_px and \
+	   delta_y <= delta_xy_px and \
+	   delta_w <= delta_xy_px and \
+	   delta_h <= delta_xy_px and \
+	   delta_t <= delta_t_ms:
+	    return True
+	else:
+	    return False
 
 
 class StereoVision(object):
@@ -260,6 +328,8 @@ class StereoVision(object):
 	self.left_center_avg = None
 	self.right_center_avg = None
 	self.eye_alignment = None
+	self.left_tracked_faces = []
+	self.right_tracked_faces = []
 
 
     def process_frame(self, stereo_frame):
@@ -278,23 +348,29 @@ class StereoVision(object):
 
 	# for each stereo face pair, look for two eyes
 	# if two eyes found, crop and normalize both images in the pair
-	l, m, r = self.find_detected_faces(self.left_faces, left_gray_image, self.right_faces, right_gray_image)
+	left_ts = stereo_frame.get_left_ts()
+	right_ts = stereo_frame.get_right_ts()
+	l, m, r = self.find_detected_faces(self.left_faces, left_gray_image, self.right_faces, right_gray_image, left_ts, right_ts)
 	self.left_detected_faces = l
 	self.matched_faces = m
 	self.right_detected_faces = r
-		    
-	# TODO annotate face node to show all detected face pairs simultaneously
-	# eliminate face_detect_node
-	# eliminate simple_face_tracker
-	# track face by recognition degree
-	#   - TargetFace, if any
-	#   - else, RecognizedFace, if any
-	#   - else, DetectedFace, if any
-	#   - else, Face, if any
-	#   - else, look around
+
+	# for each face or face pair in the current stereo frame
+	# track the face by proximity to faces in previous frames
+	# a TrackedFace is first created when a face appears in view where no other face has been for at least delta_t_ms
+	# Each time a face is detected within proximity of a TrackedFace, it is added to the TrackedFace
+	# Every DetectedFace becomes a TrackedFace either by starting a new one or joining an existing one
+	# The DetectedFace track is assigned from the TracedFace id.
+	self.track_faces(l, m, r)
 
 
     def update_stereo_alignment(self, stereo_frame):
+    	"""
+	Given a stereo frame, if a chessboard pattern can be found in both images, compute
+	the translation and rotation between the image chessboards as an approximation of
+	the transformation between the stereo frames.  Update a moving average of such
+	transformations, which is used for mapping between the frames.
+	"""
     	left_image, right_image = stereo_frame.get_images()
 	self.found_left_chessboard, self.left_chessboard_corners = cv2.findChessboardCorners(left_image, self.options.chessboard_size, flags=cv2.CALIB_CB_FAST_CHECK)
 	#rospy.loginfo('left corners ' + str(self.left_chessboard_corners))
@@ -336,6 +412,7 @@ class StereoVision(object):
 
 
     def find_faces(self, gray_image):
+    	""" Apply the Haar cascade to find faces in the grayscale image. """
 	faces = self.options.face_cascade.detectMultiScale(
 	    gray_image,
 	    scaleFactor=self.options.scale_factor,
@@ -346,9 +423,16 @@ class StereoVision(object):
 	return faces
 
 
-    def find_detected_faces(self, left_faces, left_gray_image, right_faces, right_gray_image):
-	left_detected_faces = self.find_normalized_faces(left_faces, left_gray_image)
-	right_detected_faces = self.find_normalized_faces(right_faces, right_gray_image)
+    def find_detected_faces(self, left_faces, left_gray_image, right_faces, right_gray_image, left_ts, right_ts):
+    	"""
+	Filter the faces found for those with exactly two detectable eyes.
+	Map the face coordinates from the right image to the left image coordinate system
+	using the eye alignment transform and identify matches where the same face is
+	detected in both image frames.  Return the left, matched, and right faces as
+	disjoint sets.
+	"""
+	left_detected_faces = self.find_normalized_faces(left_faces, left_gray_image, left_ts)
+	right_detected_faces = self.find_normalized_faces(right_faces, right_gray_image, right_ts)
 	matched_faces = []
 
 	# if calibrated, map right faces to left coordinate frame
@@ -380,7 +464,11 @@ class StereoVision(object):
 	return left_detected_faces, matched_faces, right_detected_faces
 
 
-    def find_normalized_faces(self, faces, gray_image):
+    def find_normalized_faces(self, faces, gray_image, ts):
+    	"""
+	Search for eyes within a face image.  If found, use the eye positions
+	to crop and normalize the face image.
+	"""
     	normalized_faces = []
 	for (x, y, w, h) in faces:
 	    # Extract just the face as a subimage
@@ -394,14 +482,15 @@ class StereoVision(object):
 	    # since eyes are found in a band, shift the coordinates to be relative to the face
 	    eyes = [(ex, ey + int(eye_band_upper*h), ew, eh) for (ex, ey, ew, eh) in eyes]
 
-	    if len(eyes) == 2:
+	    if len(eyes) == 2:  # keep only faces with exactly 2 detectable eyes
 		cv_crop, left_eye, right_eye = face_util.crop_and_normalize(face_only_gray, eyes)
-		normalized_faces.append(NormalizedFace(x, y, w, h, left_eye, right_eye, cv_crop))
+		normalized_faces.append(NormalizedFace(x, y, w, h, ts, left_eye, right_eye, cv_crop))
 		
 	return normalized_faces
 
 
     def find_eyes(self, face_only_gray):
+    	""" Apply the Haar cascade to locate eyes within the image. """
 	eyes = self.options.eye_cascade.detectMultiScale(face_only_gray,
 		    scaleFactor=self.options.eye_scale_factor,
 		    minNeighbors=self.options.eye_min_neighbors,
@@ -411,22 +500,115 @@ class StereoVision(object):
 	return eyes
 
 
+    def track_faces(self, left, matched, right):
+    	"""
+	Set the tracking id for each face.
+	1. A newly appeared face gets a new tracking id assigned.
+	2. A face in close proximity to a previously seen face is assigned the same tracking id as the previous face.
+	3. Both faces in a face pair are assigned the same tracking id.
+	"""
+	self.update_face_tracking(left, self.left_tracked_faces)
+	self.update_face_tracking(right, self.right_tracked_faces)
+	self.update_face_tracking_for_pairs(matched)
+
+
+    def update_face_tracking(self, faces, tracked_faces):
+	tracks_to_add = []
+	tracks_to_remove = []
+	delta_xy_px = self.options.delta_xy_px
+	delta_t_ms = self.options.delta_t_ms
+	for face in faces:
+	    # compare the face to the tracked faces
+	    for track in tracked_faces:
+		if len(track.faces) > 0:
+		    if track.is_related_to(face, delta_xy_px, delta_t_ms):
+			face.track = track.id
+			face.track_color = track.color
+			track.faces.append(face)
+			break
+		    elif face.ts - track.faces[-1].ts > 2:  # expire track after 2 seconds
+		    	tracks_to_remove.append(track)  # could add same track more than once
+
+	    if face.track == 0:  # no matching track found
+	    	# create a new track and assign its id to the face
+	    	track = TrackedFace(face)
+		face.track = track.id
+		face.track_color = track.color
+		# store the track for comparison with future faces
+	    	tracks_to_add.append(track)
+		rospy.loginfo('Added new face track %d', face.track)
+	    else:
+		rospy.loginfo('Matched face to track %d', face.track)
+
+	# remove expired tracks
+	for track in tracks_to_remove:
+	    if track in tracked_faces:  # may have already been removed
+		tracked_faces.remove(track)
+
+	# add new tracks
+	for track in tracks_to_add:
+	    tracked_faces.append(track)
+
+
+    def update_face_tracking_for_pairs(self, matched):
+    	left_tracks_to_add = []
+	right_tracks_to_add = []
+	delta_xy_px = self.options.delta_xy_px
+	delta_t_ms = self.options.delta_t_ms
+	for pair in matched:
+	    left_face = pair[0]
+	    for track in self.left_tracked_faces:
+	    	if len(track.faces) > 0:
+		    if track.is_related_to(left_face, delta_xy_px, delta_t_ms):
+			rospy.loginfo('Matched face pair to left track %d', track.id)
+			pair[0].track = track.id
+			pair[1].track = track.id
+			pair[0].track_color = track.color
+			pair[1].track_color = track.color
+			break
+
+	    right_face = pair[1]
+	    if right_face.track == 0:
+		for track in self.right_tracked_faces:
+		    if len(track.faces) > 0:
+			if track.is_related_to(right_face, delta_xy_px, delta_t_ms):
+			    rospy.loginfo('Matched face pair to right track %d', track.id)
+			    pair[0].track = track.id
+			    pair[1].track = track.id
+			    pair[0].track_color = track.color
+			    pair[1].track_color = track.color
+			    break
+
+	    if left_face.track == 0 or right_face.track == 0:  # no matching track found
+	    	# create a new track and assign its id to the face
+	    	left_track = TrackedFace(left_face)
+		right_track = TrackedFace(right_face, left_track.id)
+		right_track.color = left_track.color
+		left_face.track = left_track.id
+		right_face.track = right_track.id  # must be same as left_track
+		left_face.track_color = left_track.color
+		right_face.track_color = right_track.color  # same as left_track
+		# store the track for comparison with future faces
+	    	left_tracks_to_add.append(left_track)
+	    	right_tracks_to_add.append(right_track)
+		rospy.loginfo('Added new face pair track %d', left_face.track)
+
+	# add new tracks
+	for track in left_tracks_to_add:
+	    self.left_tracked_faces.append(track)
+	for track in right_tracks_to_add:
+	    self.right_tracked_faces.append(track)
+
+
 class VisionNode(object):
 
     def __init__(self):
     	rospy.init_node('vision_node')
 
-	self.vision = StereoVision()
-
 	self.left_camera_info = None
 	self.right_camera_info = None
 	self.left_images = []
 	self.right_images = []
-	#self.left_stamp = None
-	#self.right_stamp = None
-	#self.last_ros_image_left = None
-	#self.last_ros_image_right = None
-	#self.last_stereo_frame = None
 
 	myargs = rospy.myargv(sys.argv) # process ROS args and return the rest
 
@@ -439,7 +621,6 @@ class VisionNode(object):
 
 	# publisher topic parameters
 	face_topic = self.get_param('~face', '/face')
-	face_image_topic = self.get_param('~face_image', '/face/image_raw')
 	chessboard_topic = self.get_param('~chessboard', '/chessboard')
 	align_topic = self.get_param('~align', '/eye_alignment')
 	left_camera_info_topic = self.get_param('~left_camera_info', '/stereo/left/camera_info')
@@ -448,6 +629,10 @@ class VisionNode(object):
 	detected_face_topic = self.get_param('~detected_face', '/detected_face')
 	left_face_img_topic = self.get_param('~left_face_img', '/stereo/left/detected_face/image_raw')
 	right_face_img_topic = self.get_param('~right_face_img', '/stereo/right/detected_face/image_raw')
+
+	# other parameters
+	self.eye_alignment_file = self.get_param('~eye_alignment', 'eye_alignment.p')
+	self.fps = int(self.get_param('~fps', '15'))
 
 	left_image_sub = rospy.Subscriber(left_image_topic, sensor_msgs.msg.Image, self.on_left_image)
 	right_image_sub = rospy.Subscriber(right_image_topic, sensor_msgs.msg.Image, self.on_right_image)
@@ -458,12 +643,16 @@ class VisionNode(object):
 	rinfo_sub = rospy.Subscriber(right_camera_info_topic, sensor_msgs.msg.CameraInfo, self.on_right_camera_info)
 
 	self.face_pub = rospy.Publisher(face_topic, vision.msg.Face, queue_size=50)
-	self.face_image_pub = rospy.Publisher(face_image_topic, sensor_msgs.msg.Image, queue_size=50)
 	self.chessboard_pub = rospy.Publisher(chessboard_topic, sensor_msgs.msg.PointCloud, queue_size=5)
 	self.eye_align_pub = rospy.Publisher(align_topic, vision.msg.AlignEyes, queue_size=1)
 	self.detected_face_pub = rospy.Publisher(detected_face_topic, vision.msg.DetectedFace, queue_size=50)
 	self.left_face_img_pub = rospy.Publisher(left_face_img_topic, sensor_msgs.msg.Image, queue_size=50)
 	self.right_face_img_pub = rospy.Publisher(right_face_img_topic, sensor_msgs.msg.Image, queue_size=50)
+
+	self.vision = StereoVision()
+
+	# restore the previously saved eye alignment, if any
+	self.load_eye_alignment()
 
 
     def get_param(self, param_name, param_default):
@@ -481,6 +670,7 @@ class VisionNode(object):
 
 
     def on_control(self, control):
+    	# TODO implement staring control
         rospy.loginfo('Received control message %s', control)
 	#if control.data == "resume_face_tracking":
 	#    self.is_tracking = True
@@ -489,6 +679,7 @@ class VisionNode(object):
 
 
     def on_joints(self, joint_state):
+    	# TODO implement look around
 	pose = {}
 	for i in range(len(joint_state.name)):
 	    pose[joint_state.name[i]] = joint_state.position[i]
@@ -498,7 +689,9 @@ class VisionNode(object):
     	#self.last_joint_state = joint_state
         #rospy.loginfo('Received joints message')
 
+
     def on_target_face(self, target_face):
+    	# TODO implement target tracking
 	#self.last_target_face = target_face
 	#self.last_target_face_ts = time.time()
         rospy.loginfo('Received target face message')
@@ -517,9 +710,7 @@ class VisionNode(object):
     def run(self):
 	rate = rospy.Rate(30) # 30 Hz
 
-	#TODO make this automatic or a parameter
-	frames_per_second = 15
-	seconds_per_half_frame = 0.5 / frames_per_second
+	seconds_per_half_frame = 0.5 / self.fps
 
 	try:
 	    while not rospy.is_shutdown():
@@ -546,9 +737,10 @@ class VisionNode(object):
 			# clear image buffers, but keep any newer images for next round
 			self.left_images[:] = left_images[i + 1:]
 			self.right_images[:] = right_images[j + 1:]
+			# process the stereo image frame
 			stereo_frame = StereoFrame(self.left_camera_info, left_image, self.right_camera_info, right_image)
 			self.vision.process_frame(stereo_frame)
-			# publish faces TODO and face images
+			# publish faces
 			self.publish_faces(stereo_frame)
 			# publish detected faces and images
 			self.publish_detected_faces(stereo_frame)
@@ -558,8 +750,6 @@ class VisionNode(object):
 		else:
 		    # TODO handle case of one eye closed
 		    pass
-		#if self.last_stereo_frame is not None:
-		#    stereo_frame, self.last_stereo_frame = self.last_stereo_frame, None
 
 	except KeyboardInterrupt:
 	    pass
@@ -577,19 +767,17 @@ class VisionNode(object):
 
     def publish_face(self, image, face):
     	"""
-	Publish a vision.msg.Face message for this face and a corresponding subimage.
+	Publish a vision.msg.Face message for this face.
 	The header for the Face message is copied from the image header.
 	"""
     	# create Face message
 	face_msg = vision.msg.Face()
 	face_msg.header = image.header
-	face_msg.x = max(0, int(face[0]))
-	face_msg.y = max(0, int(face[1]))
+	face_msg.x = face[0]
+	face_msg.y = face[1]
 	face_msg.w = face[2]
 	face_msg.h = face[3]
 	self.face_pub.publish(face_msg)
-
-	# TODO extract face image and convert to ROS sensor_msgs.msg.Image
 
 
     def publish_detected_faces(self, stereo_frame):
@@ -604,7 +792,8 @@ class VisionNode(object):
 	for m in self.vision.matched_faces:
 	    # copy coordinates from left face to right face
 	    l = m[0]
-	    r = NormalizedFace(l.x, l.y, l.w, l.h, m[1].left_eye, m[1].right_eye, m[1].image)
+	    r = NormalizedFace(l.x, l.y, l.w, l.h, l.ts, m[1].left_eye, m[1].right_eye, m[1].image)
+	    r.track = l.track
 	    self.publish_detected_face(stereo_frame.left_ros_image, r, self.left_face_img_pub)
 	    self.publish_detected_face(stereo_frame.left_ros_image, l, self.left_face_img_pub)  # publish left face last on left channel
 
@@ -612,7 +801,8 @@ class VisionNode(object):
 	for m in self.vision.matched_faces:
 	    # copy coordinates from right face to left face
 	    r = m[1]
-	    l = NormalizedFace(r.x, r.y, r.w, r.h, m[0].left_eye, m[0].right_eye, m[0].image)
+	    l = NormalizedFace(r.x, r.y, r.w, r.h, r.ts, m[0].left_eye, m[0].right_eye, m[0].image)
+	    l.track = r.track
 	    self.publish_detected_face(stereo_frame.right_ros_image, l, self.right_face_img_pub)
 	    self.publish_detected_face(stereo_frame.right_ros_image, r, self.right_face_img_pub)  # publish right face last on right channel
 
@@ -627,6 +817,8 @@ class VisionNode(object):
 	w = face.w
 	h = face.h
 	detected_face = face_util.create_detected_face_msg(bridge, x, y, w, h, face.left_eye, face.right_eye, face.image, ros_image)
+	detected_face.track = face.track
+	detected_face.track_color = face.track_color
 
 	self.detected_face_pub.publish(detected_face)
 
@@ -662,12 +854,31 @@ class VisionNode(object):
 	    self.eye_align_pub.publish(align)
 
 
+    def load_eye_alignment(self):
+        if os.path.exists(self.eye_alignment_file):
+	    rospy.loginfo("Reading eye alignment from %s", self.eye_alignment_file)
+	    with open(self.eye_alignment_file, "rb") as f:
+		self.vision.eye_alignment = pickle.load(f)
+	    self.vision.left_right_translation_avg = self.vision.eye_alignment.t
+	    self.vision.left_right_rotation_avg = self.vision.eye_alignment.a
+	    self.vision.left_center_avg = self.vision.eye_alignment.lc
+	    self.vision.right_center_avg = self.vision.eye_alignment.rc
+
+
+    def on_exit(self):
+        rospy.loginfo("I received a kill signal")
+    	if self.vision.eye_alignment:
+	    rospy.loginfo("Writing eye alignment to %s", self.eye_alignment_file)
+	    with open(self.eye_alignment_file, "wb") as f:
+		pickle.dump(self.vision.eye_alignment, f)
+
+
 if __name__ == '__main__':
     try:
 	bridge = CvBridge()
 	node = VisionNode()
 
-	#atexit.register(node.on_exit)
+	atexit.register(node.on_exit)
 	node.run()
     except rospy.ROSInterruptException:
 	pass
