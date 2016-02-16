@@ -256,36 +256,47 @@ class StereoVisionOptions(object):
 	self.delta_t_ms = delta_t_ms
 
 
-class NormalizedFace(object):
-    def __init__(self, x, y, w, h, ts, left_eye, right_eye, image):
+class Face(object):
+    def __init__(self, x, y, w, h, ts):
     	self.x = x
 	self.y = y
 	self.w = w
 	self.h = h
 	self.ts = ts
-	self.left_eye = left_eye
-	self.right_eye = right_eye
-	self.image = image
 	self.track = 0
 	self.track_color = (255, 0, 0)
 
 
     def set_track(self, track):
-    	self.track = track
+    	self.track = track.id
+	self.track_color = track.color
 
 
-class TrackedFace(object):
+    def is_track_assigned(self):
+    	return self.track != 0
+
+
+class NormalizedFace(Face):
+    def __init__(self, x, y, w, h, ts, left_eye, right_eye, image):
+    	super(NormalizedFace, self).__init__(x, y, w, h, ts)
+	self.left_eye = left_eye
+	self.right_eye = right_eye
+	self.image = image
+
+
+class TrackedFaces(object):
 
     next_id = 1  # class variable for next tracked face id
 
-    def __init__(self, face, id=0):
+    def __init__(self, face, id=0, color=(0, 0, 0)):
     	if id == 0:
-	    self.id = TrackedFace.next_id
-	    TrackedFace.next_id += 1
+	    self.id = TrackedFaces.next_id
+	    TrackedFaces.next_id += 1
+	    self.color = tuple(np.random.randint(0, 255, 3).tolist())
 	else:
 	    self.id = id
+	    self.color = color
 	self.faces = [face]
-	self.color = tuple(np.random.randint(0, 255, 3).tolist())
 
 
     def is_related_to(self, face, delta_xy_px, delta_t_ms):
@@ -357,9 +368,9 @@ class StereoVision(object):
 
 	# for each face or face pair in the current stereo frame
 	# track the face by proximity to faces in previous frames
-	# a TrackedFace is first created when a face appears in view where no other face has been for at least delta_t_ms
-	# Each time a face is detected within proximity of a TrackedFace, it is added to the TrackedFace
-	# Every DetectedFace becomes a TrackedFace either by starting a new one or joining an existing one
+	# a TrackedFaces is first created when a face appears in view where no other face has been for at least delta_t_ms
+	# Each time a face is detected within proximity of a TrackedFaces, it is added to the TrackedFaces
+	# Every DetectedFace becomes a TrackedFaces either by starting a new one or joining an existing one
 	# The DetectedFace track is assigned from the TracedFace id.
 	self.track_faces(l, m, r)
 
@@ -425,7 +436,7 @@ class StereoVision(object):
 
     def find_detected_faces(self, left_faces, left_gray_image, right_faces, right_gray_image, left_ts, right_ts):
     	"""
-	Filter the faces found for those with exactly two detectable eyes.
+	Search the faces found for those with exactly two detectable eyes.
 	Map the face coordinates from the right image to the left image coordinate system
 	using the eye alignment transform and identify matches where the same face is
 	detected in both image frames.  Return the left, matched, and right faces as
@@ -484,7 +495,10 @@ class StereoVision(object):
 
 	    if len(eyes) == 2:  # keep only faces with exactly 2 detectable eyes
 		cv_crop, left_eye, right_eye = face_util.crop_and_normalize(face_only_gray, eyes)
-		normalized_faces.append(NormalizedFace(x, y, w, h, ts, left_eye, right_eye, cv_crop))
+	    else:
+	    	cv_crop, left_eye, right_eye = None, None, None
+
+	    normalized_faces.append(NormalizedFace(x, y, w, h, ts, left_eye, right_eye, cv_crop))
 		
 	return normalized_faces
 
@@ -522,18 +536,16 @@ class StereoVision(object):
 	    for track in tracked_faces:
 		if len(track.faces) > 0:
 		    if track.is_related_to(face, delta_xy_px, delta_t_ms):
-			face.track = track.id
-			face.track_color = track.color
+			face.set_track(track)
 			track.faces.append(face)
 			break
 		    elif face.ts - track.faces[-1].ts > 2:  # expire track after 2 seconds
 		    	tracks_to_remove.append(track)  # could add same track more than once
 
-	    if face.track == 0:  # no matching track found
+	    if not face.is_track_assigned():  # no matching track found
 	    	# create a new track and assign its id to the face
-	    	track = TrackedFace(face)
-		face.track = track.id
-		face.track_color = track.color
+	    	track = TrackedFaces(face)
+		face.set_track(track)
 		# store the track for comparison with future faces
 	    	tracks_to_add.append(track)
 		rospy.loginfo('Added new face track %d', face.track)
@@ -561,33 +573,27 @@ class StereoVision(object):
 	    	if len(track.faces) > 0:
 		    if track.is_related_to(left_face, delta_xy_px, delta_t_ms):
 			rospy.loginfo('Matched face pair to left track %d', track.id)
-			pair[0].track = track.id
-			pair[1].track = track.id
-			pair[0].track_color = track.color
-			pair[1].track_color = track.color
+			pair[0].set_track(track)
+			pair[1].set_track(track)
+			track.faces.append(left_face)
 			break
 
 	    right_face = pair[1]
-	    if right_face.track == 0:
-		for track in self.right_tracked_faces:
-		    if len(track.faces) > 0:
-			if track.is_related_to(right_face, delta_xy_px, delta_t_ms):
-			    rospy.loginfo('Matched face pair to right track %d', track.id)
-			    pair[0].track = track.id
-			    pair[1].track = track.id
-			    pair[0].track_color = track.color
-			    pair[1].track_color = track.color
-			    break
+	    for track in self.right_tracked_faces:
+		if len(track.faces) > 0:
+		    if track.is_related_to(right_face, delta_xy_px, delta_t_ms):
+			rospy.loginfo('Matched face pair to right track %d', track.id)
+			pair[0].set_track(track)
+			pair[1].set_track(track)
+			track.faces.append(right_face)
+			break
 
-	    if left_face.track == 0 or right_face.track == 0:  # no matching track found
+	    if left_face.track == 0 and right_face.track == 0:  # no matching track found
 	    	# create a new track and assign its id to the face
-	    	left_track = TrackedFace(left_face)
-		right_track = TrackedFace(right_face, left_track.id)
-		right_track.color = left_track.color
-		left_face.track = left_track.id
-		right_face.track = right_track.id  # must be same as left_track
-		left_face.track_color = left_track.color
-		right_face.track_color = right_track.color  # same as left_track
+	    	left_track = TrackedFaces(left_face)
+		right_track = TrackedFaces(right_face, left_track.id, left_track.color)
+		left_face.set_track(left_track)
+		right_face.set_track(right_track)
 		# store the track for comparison with future faces
 	    	left_tracks_to_add.append(left_track)
 	    	right_tracks_to_add.append(right_track)
@@ -786,7 +792,8 @@ class VisionNode(object):
 	2 eyes, cropped, and normalized).
 	"""
 	for f in self.vision.left_detected_faces:
-	    self.publish_detected_face(stereo_frame.left_ros_image, f, self.left_face_img_pub)
+	    if f.image is not None:
+		self.publish_detected_face(stereo_frame.left_ros_image, f, self.left_face_img_pub)
 
 	# publish both matched faces in left frame
 	for m in self.vision.matched_faces:
@@ -794,8 +801,11 @@ class VisionNode(object):
 	    l = m[0]
 	    r = NormalizedFace(l.x, l.y, l.w, l.h, l.ts, m[1].left_eye, m[1].right_eye, m[1].image)
 	    r.track = l.track
-	    self.publish_detected_face(stereo_frame.left_ros_image, r, self.left_face_img_pub)
-	    self.publish_detected_face(stereo_frame.left_ros_image, l, self.left_face_img_pub)  # publish left face last on left channel
+	    r.track_color = l.track_color
+	    if r.image is not None:
+		self.publish_detected_face(stereo_frame.left_ros_image, r, self.left_face_img_pub)
+	    if l.image is not None:
+		self.publish_detected_face(stereo_frame.left_ros_image, l, self.left_face_img_pub)  # publish left face last on left channel
 
 	# publish both matched faces in right frame
 	for m in self.vision.matched_faces:
@@ -803,11 +813,15 @@ class VisionNode(object):
 	    r = m[1]
 	    l = NormalizedFace(r.x, r.y, r.w, r.h, r.ts, m[0].left_eye, m[0].right_eye, m[0].image)
 	    l.track = r.track
-	    self.publish_detected_face(stereo_frame.right_ros_image, l, self.right_face_img_pub)
-	    self.publish_detected_face(stereo_frame.right_ros_image, r, self.right_face_img_pub)  # publish right face last on right channel
+	    l.track_color = r.track_color
+	    if l.image is not None:
+		self.publish_detected_face(stereo_frame.right_ros_image, l, self.right_face_img_pub)
+	    if r.image is not None:
+		self.publish_detected_face(stereo_frame.right_ros_image, r, self.right_face_img_pub)  # publish right face last on right channel
 
 	for f in self.vision.right_detected_faces:
-	    self.publish_detected_face(stereo_frame.right_ros_image, f, self.right_face_img_pub)
+	    if f.image is not None:
+		self.publish_detected_face(stereo_frame.right_ros_image, f, self.right_face_img_pub)
 
 
     def publish_detected_face(self, ros_image, face, detected_face_img_pub):
