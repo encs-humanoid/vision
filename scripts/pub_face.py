@@ -26,6 +26,7 @@ import cv2
 import facedb
 import Image
 import numpy as np
+import os
 import random
 import rospy
 import sensor_msgs.msg
@@ -94,6 +95,8 @@ class PubFaceNode(object):
 	    line = raw_input()
 	    while line:
 		filename = self.options.facedb + "/" + line.strip()
+		if not os.path.exists(filename):
+		    filename = line.strip()
 		self.publish_face(filename)
 		line = raw_input()
 

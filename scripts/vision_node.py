@@ -651,6 +651,13 @@ class StereoVision(object):
 	    self.tracked_faces.append(track)
 
 
+    def get_tracked_face(self, track_id):
+    	for track in self.tracked_faces:
+	    if track.id == track_id:
+	    	return track
+	return None
+
+
 class VisionNode(object):
 
     def __init__(self):
@@ -660,6 +667,8 @@ class VisionNode(object):
 	self.right_camera_info = None
 	self.left_images = []
 	self.right_images = []
+	self.is_tracking_target = True
+	self.target_track_id = 0
 
 	myargs = rospy.myargv(sys.argv) # process ROS args and return the rest
 
@@ -680,10 +689,19 @@ class VisionNode(object):
 	detected_face_topic = self.get_param('~detected_face', '/detected_face')
 	left_face_img_topic = self.get_param('~left_face_img', '/stereo/left/detected_face/image_raw')
 	right_face_img_topic = self.get_param('~right_face_img', '/stereo/right/detected_face/image_raw')
+	joy_topic = self.get_param('~joy', '/joy')
 
 	# other parameters
 	self.eye_alignment_file = self.get_param('~eye_alignment', 'eye_alignment.p')
 	self.fps = int(self.get_param('~fps', '15'))
+	# set the gain multiplier which converts the fractional position of
+	# a face with respect to the center of gaze into a joystick analog
+	# signal.  Joystick signals should be in [-1, 1], so gain is in [0, 1]
+	self.gain = float(self.get_param("~gain", "0.4"))
+	self.center_gaze_left_x = float(self.get_param("~center_gaze_left_x", "0.7"))
+	self.center_gaze_left_y = float(self.get_param("~center_gaze_left_y", "0.35"))
+	self.center_gaze_right_x = float(self.get_param("~center_gaze_right_x", "0.33"))
+	self.center_gaze_right_y = float(self.get_param("~center_gaze_right_y", "0.54"))
 
 	left_image_sub = rospy.Subscriber(left_image_topic, sensor_msgs.msg.Image, self.on_left_image)
 	right_image_sub = rospy.Subscriber(right_image_topic, sensor_msgs.msg.Image, self.on_right_image)
@@ -699,6 +717,7 @@ class VisionNode(object):
 	self.detected_face_pub = rospy.Publisher(detected_face_topic, vision.msg.DetectedFace, queue_size=50)
 	self.left_face_img_pub = rospy.Publisher(left_face_img_topic, sensor_msgs.msg.Image, queue_size=50)
 	self.right_face_img_pub = rospy.Publisher(right_face_img_topic, sensor_msgs.msg.Image, queue_size=50)
+	self.joy_pub = rospy.Publisher(joy_topic, sensor_msgs.msg.Joy, queue_size=1)
 
 	self.vision = StereoVision()
 
@@ -721,12 +740,12 @@ class VisionNode(object):
 
 
     def on_control(self, control):
-    	# TODO implement staring control
+    	# implement staring control
         rospy.loginfo('Received control message %s', control)
-	#if control.data == "resume_face_tracking":
-	#    self.is_tracking = True
-	#elif control.data == "stop_face_tracking":
-	#    self.is_tracking = False
+	if control.data == "resume_face_tracking":
+	    self.is_tracking_target = True
+	elif control.data == "stop_face_tracking":
+	    self.is_tracking_target = False
 
 
     def on_joints(self, joint_state):
@@ -742,10 +761,7 @@ class VisionNode(object):
 
 
     def on_target_face(self, target_face):
-    	# TODO implement target tracking
-	#self.last_target_face = target_face
-	#self.last_target_face_ts = time.time()
-        rospy.loginfo('Received target face message')
+	self.target_track_id = target_face.track_id
 
 
     def on_left_camera_info(self, camera_info):
@@ -798,6 +814,15 @@ class VisionNode(object):
 			# publish chessboards
 			self.publish_chessboards(stereo_frame)
 			self.publish_eye_alignment()
+			# stare at target face
+			if self.is_tracking_target:
+			    track = self.vision.get_tracked_face(self.target_track_id)
+			    if track:
+				self.look_at_target(track, stereo_frame)
+			    else:
+			    	self.look_around()
+			else:
+			    self.look_still()
 		else:
 		    # TODO handle case of one eye closed
 		    pass
@@ -924,6 +949,59 @@ class VisionNode(object):
 	    self.vision.left_right_rotation_avg = self.vision.eye_alignment.a
 	    self.vision.left_center_avg = self.vision.eye_alignment.lc
 	    self.vision.right_center_avg = self.vision.eye_alignment.rc
+
+
+    def look_at_target(self, target_track, stereo_frame):
+    	left_image, right_image = stereo_frame.get_images()
+
+	left_face = None
+	right_face = None
+
+    	if len(target_track.left_faces) > 0:
+	    left_face = target_track.left_faces[-1]
+    	if len(target_track.right_faces) > 0:
+	    right_face = target_track.right_faces[-1]
+	
+	if left_face:
+	    f = left_face
+	    center_gaze_x = self.center_gaze_left_x
+	    center_gaze_y = self.center_gaze_left_y
+	    color_image = left_image
+	elif right_face:
+	    f = right_face
+	    center_gaze_x = self.center_gaze_right_x
+	    center_gaze_y = self.center_gaze_right_y
+	    color_image = right_image
+	else:
+	    return  # nothing to track
+
+	x = f.x
+	y = f.y
+	w = f.w
+	h = f.h
+
+	iw, ih = color_image.shape[1::-1] # shape is h, w, d; reverse (h, w)->(w, h)
+	fx, fy = (x + w/2, y + h/2); # center of face rectangle
+	jx = self.gain * (iw * center_gaze_x - fx) / iw
+	jy = self.gain * (ih * center_gaze_y - fy) / ih
+
+	self.joy_pub.publish(self.new_joy_message(jx, jy))
+
+
+    def look_around(self):
+    	# TODO implement this
+	self.look_still()  # temporary
+
+
+    def look_still(self):
+	self.joy_pub.publish(self.new_joy_message(0, 0))
+
+
+    def new_joy_message(self, x_axis, y_axis):
+	joy = sensor_msgs.msg.Joy()
+	joy.axes = [x_axis, y_axis, 0.0, 0.0, 0.0, 0.0, 0.0]
+	joy.buttons = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+	return joy
 
 
     def on_exit(self):

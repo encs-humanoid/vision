@@ -57,6 +57,7 @@ add_message_files(
   Face.msg
   DetectedFace.msg
   LearnedFace.msg
+  NamedFace.msg
   RecognizedFace.msg
   TargetFace.msg
 #   Message2.msg

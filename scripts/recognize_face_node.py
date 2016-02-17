@@ -203,6 +203,8 @@ class RecognizeFaceNode(object):
 	if len(ids) >= self.min_match:
 	    recognized_face = RecognizedFace()
 	    recognized_face.header = face.header
+	    recognized_face.track_id = face.track_id
+	    recognized_face.track_color = face.track_color
 	    recognized_face.x = face.x
 	    recognized_face.y = face.y
 	    recognized_face.w = face.w

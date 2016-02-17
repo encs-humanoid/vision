@@ -73,6 +73,12 @@ class Color(object):
     RED = (0, 0, 255)
 
 
+class Names(object):
+    def __init__(self, names, confidences):
+    	self.names = names
+	self.confs = confidences
+
+
 class AnnotateFaceNode(object):
     def __init__(self):
 	rospy.init_node('annotate_face_node', anonymous=True)
@@ -89,6 +95,7 @@ class AnnotateFaceNode(object):
 	self.last_chessboard_ts = time.time()
 	self.eye_alignment = None
 	self.colors = {}
+	self.names = {}
 
 	#self.oc.load('face_model1.txt')
 
@@ -108,6 +115,7 @@ class AnnotateFaceNode(object):
 	face_topic = self.get_param('~face', '/face')
 	chessboard_topic = self.get_param('~chessboard', '/chessboard')
 	align_topic = self.get_param('~align', '/eye_alignment')
+	name_topic = self.get_param('~name', '/named_face')
 	self.image_width = int(self.get_param('~image_width', '600'))
 	self.image_height = int(self.get_param('~image_height', '400'))
 
@@ -119,6 +127,7 @@ class AnnotateFaceNode(object):
 	face_sub = rospy.Subscriber(face_topic, vision.msg.Face, self.on_face)
 	chessboard_sub = rospy.Subscriber(chessboard_topic, sensor_msgs.msg.PointCloud, self.on_chessboard)
 	align_sub = rospy.Subscriber(align_topic, vision.msg.AlignEyes, self.on_eye_alignment)
+	name_sub = rospy.Subscriber(name_topic, vision.msg.NamedFace, self.on_named_face)
 
 	self.out_pub = rospy.Publisher(out_topic, sensor_msgs.msg.Image, queue_size=5)
 
@@ -175,6 +184,10 @@ class AnnotateFaceNode(object):
 	rcx = align.rc.x
 	rcy = align.rc.y
     	self.eye_alignment = vision_node.StereoAlignment(self.image_height, [tx, ty], th, [lcx, lcy], [rcx, rcy])
+
+
+    def on_named_face(self, named_face):
+    	self.names[named_face.track_id] = Names(named_face.names, named_face.confs)
 
 
     def run(self):
@@ -236,12 +249,19 @@ class AnnotateFaceNode(object):
 		    cv2.rectangle(color_image, (f.x, f.y), (f.x + f.w, f.y + f.h), Color.BLACK, 2)
 		    color = tuple(f.track_color)
 		    cv2.putText(color_image, str(f.track_id), (int(f.x + 0.5 * f.w - 7), int(f.y + 0.5 * f.h) + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color)
+		    if f.track_id in self.names:
+			names = self.names[f.track_id]
+			if names and len(names.names) > 0:
+			    # TODO show all names with confidences if more than one
+			    name = names.names[0]
+			    conf = names.confs[0]
+			    cv2.putText(color_image, str(name) + "-" + str(conf), (f.x + 2, f.y + 12), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color)
 		# discard stored faces which are too old
 		self.faces = [f for f in self.faces if now_sec - f.header.stamp.to_sec() < 0.1]
 
 	    # highlight detected face in blue or random color if tracked
 	    if len(self.detected_faces) > 0:
-		rospy.loginfo('%d detected faces for frame %s', len(self.detected_faces), self.frame_id)
+		#rospy.loginfo('%d detected faces for frame %s', len(self.detected_faces), self.frame_id)
 	    	for d in self.detected_faces:
 		    #color = self.get_track_color(d.track_id)
 		    color = tuple(d.track_color)
@@ -281,7 +301,7 @@ class AnnotateFaceNode(object):
 
 	    # highlight target face in yellow
 	    # TODO enable this again
-	    if False and len(self.target_faces) > 0:
+	    if len(self.target_faces) > 0:
 	    	for t in self.target_faces:
 		    if t.id == t.recog_id:
 			cv2.rectangle(color_image, (t.x, t.y), (t.x + t.w, t.y + t.h), Color.YELLOW, 2)
