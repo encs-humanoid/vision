@@ -234,6 +234,8 @@ class AnnotateFaceNode(object):
 	    if len(self.faces) > 0:
 	    	for f in self.faces:
 		    cv2.rectangle(color_image, (f.x, f.y), (f.x + f.w, f.y + f.h), Color.BLACK, 2)
+		    color = tuple(f.track_color)
+		    cv2.putText(color_image, str(f.track_id), (int(f.x + 0.5 * f.w - 7), int(f.y + 0.5 * f.h) + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color)
 		# discard stored faces which are too old
 		self.faces = [f for f in self.faces if now_sec - f.header.stamp.to_sec() < 0.1]
 
@@ -241,14 +243,14 @@ class AnnotateFaceNode(object):
 	    if len(self.detected_faces) > 0:
 		rospy.loginfo('%d detected faces for frame %s', len(self.detected_faces), self.frame_id)
 	    	for d in self.detected_faces:
-		    #color = self.get_track_color(d.track)
+		    #color = self.get_track_color(d.track_id)
 		    color = tuple(d.track_color)
 		    cv2.rectangle(color_image, (d.x, d.y), (d.x + d.w, d.y + d.h), color, 2)
 		    # draw eyes
 		    eyes = [(d.left_eye_x, d.left_eye_y, d.left_eye_w, d.left_eye_h), (d.right_eye_x, d.right_eye_y, d.right_eye_w, d.right_eye_h)]
 		    for (ex, ey, ew, eh) in eyes:
 			cv2.rectangle(color_image, (d.x + ex, d.y + ey), (d.x + ex + ew, d.y + ey + eh), color, 2)
-		    cv2.putText(color_image, str(d.track), (int(d.x + 0.5 * d.w - 7), int(d.y + 0.5 * d.h) + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color)
+		    cv2.putText(color_image, str(d.track_id), (int(d.x + 0.5 * d.w - 7), int(d.y + 0.5 * d.h) + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color)
 		    if not self.options.nonn:
 			#cv_image = self.bridge.imgmsg_to_cv2(d.image)
 			#cw, ch = cv_image.shape[1::-1] # note image shape is h, w, d; reverse (h, w)->(w, h)

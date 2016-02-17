@@ -43,6 +43,7 @@ import rospy
 import sensor_msgs.msg
 import std_msgs.msg
 import sys
+import time
 import vision.msg
 
 
@@ -257,28 +258,34 @@ class StereoVisionOptions(object):
 
 
 class Face(object):
-    def __init__(self, x, y, w, h, ts):
+
+    UNKNOWN = 0
+    LEFT = 1
+    RIGHT = 2
+
+    def __init__(self, x, y, w, h, ts, stereo_side=UNKNOWN):
     	self.x = x
 	self.y = y
 	self.w = w
 	self.h = h
 	self.ts = ts
-	self.track = 0
+	self.track_id = 0
 	self.track_color = (255, 0, 0)
+	self.stereo_side = stereo_side
 
 
     def set_track(self, track):
-    	self.track = track.id
+    	self.track_id = track.id
 	self.track_color = track.color
 
 
     def is_track_assigned(self):
-    	return self.track != 0
+    	return self.track_id != 0
 
 
 class NormalizedFace(Face):
-    def __init__(self, x, y, w, h, ts, left_eye, right_eye, image):
-    	super(NormalizedFace, self).__init__(x, y, w, h, ts)
+    def __init__(self, x, y, w, h, ts, stereo_side, left_eye, right_eye, image):
+    	super(NormalizedFace, self).__init__(x, y, w, h, ts, stereo_side)
 	self.left_eye = left_eye
 	self.right_eye = right_eye
 	self.image = image
@@ -288,7 +295,24 @@ class TrackedFaces(object):
 
     next_id = 1  # class variable for next tracked face id
 
-    def __init__(self, face, id=0, color=(0, 0, 0)):
+    @staticmethod
+    def from_face(face, delta_xy_px, delta_t_ms):
+    	track = TrackedFaces(delta_xy_px, delta_t_ms)
+	track.add_face(face)
+	return track
+
+
+    @staticmethod
+    def from_face_pair(pair, delta_xy_px, delta_t_ms):
+    	track = TrackedFaces(delta_xy_px, delta_t_ms)
+	for face in pair:
+	    track.add_face(face)
+	return track
+
+
+    def __init__(self, delta_xy_px, delta_t_ms, id=0, color=(0, 0, 0)):
+    	self.delta_xy_px = delta_xy_px
+	self.delta_t_ms = delta_t_ms
     	if id == 0:
 	    self.id = TrackedFaces.next_id
 	    TrackedFaces.next_id += 1
@@ -296,24 +320,60 @@ class TrackedFaces(object):
 	else:
 	    self.id = id
 	    self.color = color
-	self.faces = [face]
+	self.left_faces = []
+	self.right_faces = []
 
 
-    def is_related_to(self, face, delta_xy_px, delta_t_ms):
-	prev = self.faces[-1]  # compare proximity with most recent tracked face
-	delta_x = abs(face.x - prev.x)
-	delta_y = abs(face.y - prev.y)
-	delta_w = abs(face.w - prev.w)
-	delta_h = abs(face.h - prev.h)
-	delta_t = abs((face.ts - prev.ts) * 1000)
-	if delta_x <= delta_xy_px and \
-	   delta_y <= delta_xy_px and \
-	   delta_w <= delta_xy_px and \
-	   delta_h <= delta_xy_px and \
-	   delta_t <= delta_t_ms:
+    def track_face(self, face):
+    	if self._is_related_to(face):
+	    self.add_face(face)
 	    return True
 	else:
 	    return False
+
+
+    def _is_related_to(self, face):
+	faces = self._get_faces(face)
+    	if len(faces) > 0:
+	    prev = faces[-1]  # compare proximity with most recent tracked face
+	    delta_x = abs(face.x - prev.x)
+	    delta_y = abs(face.y - prev.y)
+	    delta_w = abs(face.w - prev.w)
+	    delta_h = abs(face.h - prev.h)
+	    delta_t = abs((face.ts - prev.ts) * 1000)
+	    if delta_x <= self.delta_xy_px and \
+	       delta_y <= self.delta_xy_px and \
+	       delta_w <= self.delta_xy_px and \
+	       delta_h <= self.delta_xy_px and \
+	       delta_t <= self.delta_t_ms:
+		return True
+	return False
+
+
+    def _get_faces(self, face):
+	if face.stereo_side == Face.LEFT:
+	    return self.left_faces
+	else:
+	    return self.right_faces
+
+
+    def add_face(self, face):
+	faces = self._get_faces(face)
+	faces.append(face)
+	face.set_track(self)
+
+
+    def is_expired_by_sec(self, expiry_sec):
+    	left_expired = True
+	right_expired = True
+	now = time.time()
+    	if len(self.left_faces) > 0:
+	    if now - self.left_faces[-1].ts <= expiry_sec:
+	    	left_expired = False
+	if len(self.right_faces) > 0:
+	    if now - self.right_faces[-1].ts <= expiry_sec:
+	    	right_expired = False
+	return left_expired and right_expired
 
 
 class StereoVision(object):
@@ -339,8 +399,7 @@ class StereoVision(object):
 	self.left_center_avg = None
 	self.right_center_avg = None
 	self.eye_alignment = None
-	self.left_tracked_faces = []
-	self.right_tracked_faces = []
+	self.tracked_faces = []
 
 
     def process_frame(self, stereo_frame):
@@ -353,15 +412,19 @@ class StereoVision(object):
 	right_gray_image = cv2.cvtColor(right_image, cv2.COLOR_BGR2GRAY)
 
 	# find faces
-	self.left_faces = self.find_faces(left_gray_image)
-	self.right_faces = self.find_faces(right_gray_image)
+	left_ts = stereo_frame.get_left_ts()
+	right_ts = stereo_frame.get_right_ts()
+	self.left_faces = self.find_faces(left_gray_image, left_ts, True)
+	self.right_faces = self.find_faces(right_gray_image, right_ts, False)
 	#rospy.loginfo('got ' + str(len(self.left_faces)) + ' left and ' + str(len(self.right_faces)) + ' right faces')
 
 	# for each stereo face pair, look for two eyes
 	# if two eyes found, crop and normalize both images in the pair
-	left_ts = stereo_frame.get_left_ts()
-	right_ts = stereo_frame.get_right_ts()
-	l, m, r = self.find_detected_faces(self.left_faces, left_gray_image, self.right_faces, right_gray_image, left_ts, right_ts)
+	self.find_eyes_and_normalize(self.left_faces, left_gray_image)
+	self.find_eyes_and_normalize(self.right_faces, right_gray_image)
+
+	# find matched face pairs
+	l, m, r = self.find_matched_face_pairs(self.left_faces, self.right_faces)
 	self.left_detected_faces = l
 	self.matched_faces = m
 	self.right_detected_faces = r
@@ -422,7 +485,7 @@ class StereoVision(object):
 	    rospy.loginfo('avg translation vector ' + str(self.left_right_translation_avg) + ", avg rotation angle " + str(self.left_right_rotation_avg*180/math.pi))
 
 
-    def find_faces(self, gray_image):
+    def find_faces(self, gray_image, ts, is_left):
     	""" Apply the Haar cascade to find faces in the grayscale image. """
 	faces = self.options.face_cascade.detectMultiScale(
 	    gray_image,
@@ -431,57 +494,20 @@ class StereoVision(object):
 	    minSize=self.options.min_size,
 	    flags=cv2.cv.CV_HAAR_SCALE_IMAGE
 	)
-	return faces
+	return [NormalizedFace(x, y, w, h, ts, (Face.LEFT if is_left else Face.RIGHT), None, None, None) for (x, y, w, h) in faces]
 
 
-    def find_detected_faces(self, left_faces, left_gray_image, right_faces, right_gray_image, left_ts, right_ts):
-    	"""
-	Search the faces found for those with exactly two detectable eyes.
-	Map the face coordinates from the right image to the left image coordinate system
-	using the eye alignment transform and identify matches where the same face is
-	detected in both image frames.  Return the left, matched, and right faces as
-	disjoint sets.
-	"""
-	left_detected_faces = self.find_normalized_faces(left_faces, left_gray_image, left_ts)
-	right_detected_faces = self.find_normalized_faces(right_faces, right_gray_image, right_ts)
-	matched_faces = []
-
-	# if calibrated, map right faces to left coordinate frame
-	if self.eye_alignment is not None:
-	    r_points = np.array([(f.x, f.y, f.w, f.h) for f in right_detected_faces])
-	    mapped_points = self.eye_alignment.map_image_points(r_points)
-
-	    # find stereo face pairs
-	    if len(left_detected_faces) > 0 and len(right_detected_faces) > 0:
-		matcher = cv2.BFMatcher(cv2.NORM_L2SQR, crossCheck=True)
-		l_points = np.array([(f.x, f.y, f.w, f.h) for f in left_detected_faces])
-		matches = matcher.match(np.array(l_points, dtype=np.float32), np.array(mapped_points, dtype=np.float32))
-		#if len(matches) > 0:
-		#    print [(m.queryIdx, m.trainIdx, m.distance) for m in matches]
-		# organize faces into left-only, matched, right-only
-		remove_from_left = []
-		remove_from_right = []
-		for m in matches:
-		    remove_from_left.append(m.queryIdx)
-		    remove_from_right.append(m.trainIdx)
-		    matched_faces.append((left_detected_faces[m.queryIdx], right_detected_faces[m.trainIdx]))
-		remove_from_left = sorted(remove_from_left, reverse=True)
-		remove_from_right = sorted(remove_from_right, reverse=True)
-		for i in remove_from_left:
-		    del left_detected_faces[i]
-		for i in remove_from_right:
-		    del right_detected_faces[i]
-
-	return left_detected_faces, matched_faces, right_detected_faces
-
-
-    def find_normalized_faces(self, faces, gray_image, ts):
+    def find_eyes_and_normalize(self, faces, gray_image):
     	"""
 	Search for eyes within a face image.  If found, use the eye positions
 	to crop and normalize the face image.
 	"""
-    	normalized_faces = []
-	for (x, y, w, h) in faces:
+	for f in faces:
+	    x = f.x
+	    y = f.y
+	    w = f.w
+	    h = f.h
+
 	    # Extract just the face as a subimage
 	    face_only_gray = gray_image[y:y + h, x:x + w]
 
@@ -498,9 +524,9 @@ class StereoVision(object):
 	    else:
 	    	cv_crop, left_eye, right_eye = None, None, None
 
-	    normalized_faces.append(NormalizedFace(x, y, w, h, ts, left_eye, right_eye, cv_crop))
-		
-	return normalized_faces
+	    f.left_eye = left_eye
+	    f.right_eye = right_eye
+	    f.image = cv_crop
 
 
     def find_eyes(self, face_only_gray):
@@ -514,6 +540,46 @@ class StereoVision(object):
 	return eyes
 
 
+    def find_matched_face_pairs(self, left_faces, right_faces):
+    	"""
+	Map the face coordinates from the right image to the left image coordinate system
+	using the eye alignment transform and identify matches where the same face is
+	detected in both image frames.  Return the left, matched, and right faces as
+	disjoint sets.
+	"""
+	left_detected_faces = list(left_faces)
+	right_detected_faces = list(right_faces)
+	matched_faces = []
+
+	# if calibrated, map right faces to left coordinate frame
+	if self.eye_alignment is not None:
+	    r_points = np.array([(f.x, f.y, f.w, f.h) for f in right_detected_faces])
+	    mapped_points = self.eye_alignment.map_image_points(r_points)
+
+	    # find stereo face pairs
+	    if len(left_faces) > 0 and len(right_faces) > 0:
+		matcher = cv2.BFMatcher(cv2.NORM_L2SQR, crossCheck=True)
+		l_points = np.array([(f.x, f.y, f.w, f.h) for f in left_faces])
+		matches = matcher.match(np.array(l_points, dtype=np.float32), np.array(mapped_points, dtype=np.float32))
+		#if len(matches) > 0:
+		#    print [(m.queryIdx, m.trainIdx, m.distance) for m in matches]
+		# organize faces into left-only, matched, right-only
+		remove_from_left = []
+		remove_from_right = []
+		for m in matches:
+		    remove_from_left.append(m.queryIdx)
+		    remove_from_right.append(m.trainIdx)
+		    matched_faces.append((left_faces[m.queryIdx], right_faces[m.trainIdx]))
+		remove_from_left = sorted(remove_from_left, reverse=True)
+		remove_from_right = sorted(remove_from_right, reverse=True)
+		for i in remove_from_left:
+		    del left_detected_faces[i]
+		for i in remove_from_right:
+		    del right_detected_faces[i]
+
+	return left_detected_faces, matched_faces, right_detected_faces
+
+
     def track_faces(self, left, matched, right):
     	"""
 	Set the tracking id for each face.
@@ -521,89 +587,68 @@ class StereoVision(object):
 	2. A face in close proximity to a previously seen face is assigned the same tracking id as the previous face.
 	3. Both faces in a face pair are assigned the same tracking id.
 	"""
-	self.update_face_tracking(left, self.left_tracked_faces)
-	self.update_face_tracking(right, self.right_tracked_faces)
-	self.update_face_tracking_for_pairs(matched)
-
-
-    def update_face_tracking(self, faces, tracked_faces):
-	tracks_to_add = []
+	# loop over tracks and find expired ones
 	tracks_to_remove = []
-	delta_xy_px = self.options.delta_xy_px
-	delta_t_ms = self.options.delta_t_ms
-	for face in faces:
-	    # compare the face to the tracked faces
-	    for track in tracked_faces:
-		if len(track.faces) > 0:
-		    if track.is_related_to(face, delta_xy_px, delta_t_ms):
-			face.set_track(track)
-			track.faces.append(face)
-			break
-		    elif face.ts - track.faces[-1].ts > 2:  # expire track after 2 seconds
-		    	tracks_to_remove.append(track)  # could add same track more than once
-
-	    if not face.is_track_assigned():  # no matching track found
-	    	# create a new track and assign its id to the face
-	    	track = TrackedFaces(face)
-		face.set_track(track)
-		# store the track for comparison with future faces
-	    	tracks_to_add.append(track)
-		rospy.loginfo('Added new face track %d', face.track)
-	    else:
-		rospy.loginfo('Matched face to track %d', face.track)
+	for track in self.tracked_faces:
+	    if track.is_expired_by_sec(2):
+	    	tracks_to_remove.append(track)
 
 	# remove expired tracks
 	for track in tracks_to_remove:
-	    if track in tracked_faces:  # may have already been removed
-		tracked_faces.remove(track)
+	    self.tracked_faces.remove(track)
+
+	self.update_face_tracking(left)
+	self.update_face_tracking(right)
+	self.update_face_tracking_for_pairs(matched)
+
+
+    def update_face_tracking(self, faces):
+	tracks_to_add = []
+	for face in faces:
+	    # compare the face to the tracked faces
+	    for track in self.tracked_faces:
+	    	if track.track_face(face):
+		    break
+
+	    if not face.is_track_assigned():  # no matching track found
+	    	# create a new track and assign its id to the face
+	    	track = TrackedFaces.from_face(face, self.options.delta_xy_px, self.options.delta_t_ms)
+		# store the track for comparison with future faces
+	    	tracks_to_add.append(track)
+		rospy.loginfo('Added new face track %d', face.track_id)
+	    else:
+		rospy.loginfo('Matched face to track %d', face.track_id)
 
 	# add new tracks
 	for track in tracks_to_add:
-	    tracked_faces.append(track)
+	    self.tracked_faces.append(track)
 
 
     def update_face_tracking_for_pairs(self, matched):
-    	left_tracks_to_add = []
-	right_tracks_to_add = []
-	delta_xy_px = self.options.delta_xy_px
-	delta_t_ms = self.options.delta_t_ms
+    	tracks_to_add = []
 	for pair in matched:
 	    left_face = pair[0]
-	    for track in self.left_tracked_faces:
-	    	if len(track.faces) > 0:
-		    if track.is_related_to(left_face, delta_xy_px, delta_t_ms):
-			rospy.loginfo('Matched face pair to left track %d', track.id)
-			pair[0].set_track(track)
-			pair[1].set_track(track)
-			track.faces.append(left_face)
-			break
-
 	    right_face = pair[1]
-	    for track in self.right_tracked_faces:
-		if len(track.faces) > 0:
-		    if track.is_related_to(right_face, delta_xy_px, delta_t_ms):
-			rospy.loginfo('Matched face pair to right track %d', track.id)
-			pair[0].set_track(track)
-			pair[1].set_track(track)
-			track.faces.append(right_face)
-			break
+	    for track in self.tracked_faces:
+	    	is_tracking_left = track.track_face(left_face)
+		is_tracking_right = track.track_face(right_face)
+		if is_tracking_left or is_tracking_right:
+		    break
 
-	    if left_face.track == 0 and right_face.track == 0:  # no matching track found
-	    	# create a new track and assign its id to the face
-	    	left_track = TrackedFaces(left_face)
-		right_track = TrackedFaces(right_face, left_track.id, left_track.color)
-		left_face.set_track(left_track)
-		right_face.set_track(right_track)
+	    if not left_face.is_track_assigned() and not right_face.is_track_assigned():  # no matching track found
+	    	# create a new track and assign its id to the pair
+	    	track = TrackedFaces.from_face_pair(pair, self.options.delta_xy_px, self.options.delta_t_ms)
 		# store the track for comparison with future faces
-	    	left_tracks_to_add.append(left_track)
-	    	right_tracks_to_add.append(right_track)
-		rospy.loginfo('Added new face pair track %d', left_face.track)
+	    	tracks_to_add.append(track)
+		rospy.loginfo('Added new face pair track %d', left_face.track_id)
+	    elif not left_face.is_track_assigned():  # matched right but not left
+	    	track.add_face(left_face)  # add left face to the track
+	    elif not right_face.is_track_assigned():  # matched left but not right
+	    	track.add_face(right_face)  # add right face to the track
 
 	# add new tracks
-	for track in left_tracks_to_add:
-	    self.left_tracked_faces.append(track)
-	for track in right_tracks_to_add:
-	    self.right_tracked_faces.append(track)
+	for track in tracks_to_add:
+	    self.tracked_faces.append(track)
 
 
 class VisionNode(object):
@@ -779,10 +824,12 @@ class VisionNode(object):
     	# create Face message
 	face_msg = vision.msg.Face()
 	face_msg.header = image.header
-	face_msg.x = face[0]
-	face_msg.y = face[1]
-	face_msg.w = face[2]
-	face_msg.h = face[3]
+	face_msg.x = face.x
+	face_msg.y = face.y
+	face_msg.w = face.w
+	face_msg.h = face.h
+	face_msg.track_id = face.track_id
+	face_msg.track_color = face.track_color
 	self.face_pub.publish(face_msg)
 
 
@@ -799,8 +846,8 @@ class VisionNode(object):
 	for m in self.vision.matched_faces:
 	    # copy coordinates from left face to right face
 	    l = m[0]
-	    r = NormalizedFace(l.x, l.y, l.w, l.h, l.ts, m[1].left_eye, m[1].right_eye, m[1].image)
-	    r.track = l.track
+	    r = NormalizedFace(l.x, l.y, l.w, l.h, l.ts, l.stereo_side, m[1].left_eye, m[1].right_eye, m[1].image)
+	    r.track_id = l.track_id
 	    r.track_color = l.track_color
 	    if r.image is not None:
 		self.publish_detected_face(stereo_frame.left_ros_image, r, self.left_face_img_pub)
@@ -811,8 +858,8 @@ class VisionNode(object):
 	for m in self.vision.matched_faces:
 	    # copy coordinates from right face to left face
 	    r = m[1]
-	    l = NormalizedFace(r.x, r.y, r.w, r.h, r.ts, m[0].left_eye, m[0].right_eye, m[0].image)
-	    l.track = r.track
+	    l = NormalizedFace(r.x, r.y, r.w, r.h, r.ts, r.stereo_side, m[0].left_eye, m[0].right_eye, m[0].image)
+	    l.track_id = r.track_id
 	    l.track_color = r.track_color
 	    if l.image is not None:
 		self.publish_detected_face(stereo_frame.right_ros_image, l, self.right_face_img_pub)
@@ -831,7 +878,7 @@ class VisionNode(object):
 	w = face.w
 	h = face.h
 	detected_face = face_util.create_detected_face_msg(bridge, x, y, w, h, face.left_eye, face.right_eye, face.image, ros_image)
-	detected_face.track = face.track
+	detected_face.track_id = face.track_id
 	detected_face.track_color = face.track_color
 
 	self.detected_face_pub.publish(detected_face)
