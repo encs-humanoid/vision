@@ -36,6 +36,7 @@ import cv2
 import face_util
 import geometry_msgs.msg
 import math
+from math import pi
 import numpy as np
 import os
 import pickle
@@ -51,12 +52,6 @@ import vision.msg
 # annotate face node to show all detected face pairs simultaneously
 # eliminate face_detect_node
 # eliminate simple_face_tracker
-# TODO track face by recognition degree
-#   - TargetFace, if any
-#   - else, RecognizedFace, if any
-#   - else, DetectedFace, if any
-#   - else, Face, if any
-#   - else, look around
 # TODO publish total number of detected faces after matching
 # TODO move look around behavior from simple_face_tracker.py
 
@@ -615,9 +610,9 @@ class StereoVision(object):
 	    	track = TrackedFaces.from_face(face, self.options.delta_xy_px, self.options.delta_t_ms)
 		# store the track for comparison with future faces
 	    	tracks_to_add.append(track)
-		rospy.loginfo('Added new face track %d', face.track_id)
-	    else:
-		rospy.loginfo('Matched face to track %d', face.track_id)
+		#rospy.loginfo('Added new face track %d', face.track_id)
+	    #else:
+	    #	rospy.loginfo('Matched face to track %d', face.track_id)
 
 	# add new tracks
 	for track in tracks_to_add:
@@ -640,7 +635,7 @@ class StereoVision(object):
 	    	track = TrackedFaces.from_face_pair(pair, self.options.delta_xy_px, self.options.delta_t_ms)
 		# store the track for comparison with future faces
 	    	tracks_to_add.append(track)
-		rospy.loginfo('Added new face pair track %d', left_face.track_id)
+		#rospy.loginfo('Added new face pair track %d', left_face.track_id)
 	    elif not left_face.is_track_assigned():  # matched right but not left
 	    	track.add_face(left_face)  # add left face to the track
 	    elif not right_face.is_track_assigned():  # matched left but not right
@@ -669,6 +664,8 @@ class VisionNode(object):
 	self.right_images = []
 	self.is_tracking_target = True
 	self.target_track_id = 0
+    	self.recog_track_id = 0
+	self.look_straight_target_selected_time = 0
 
 	myargs = rospy.myargv(sys.argv) # process ROS args and return the rest
 
@@ -697,11 +694,26 @@ class VisionNode(object):
 	# set the gain multiplier which converts the fractional position of
 	# a face with respect to the center of gaze into a joystick analog
 	# signal.  Joystick signals should be in [-1, 1], so gain is in [0, 1]
-	self.gain = float(self.get_param("~gain", "0.4"))
-	self.center_gaze_left_x = float(self.get_param("~center_gaze_left_x", "0.7"))
-	self.center_gaze_left_y = float(self.get_param("~center_gaze_left_y", "0.35"))
-	self.center_gaze_right_x = float(self.get_param("~center_gaze_right_x", "0.33"))
-	self.center_gaze_right_y = float(self.get_param("~center_gaze_right_y", "0.54"))
+	self.gain = float(self.get_param("~gain", "0.75"))
+	self.center_gaze_left_x = float(self.get_param("~center_gaze_left_x", "0.4"))
+	self.center_gaze_left_y = float(self.get_param("~center_gaze_left_y", "0.4"))
+	self.center_gaze_right_x = float(self.get_param("~center_gaze_right_x", "0.7"))
+	self.center_gaze_right_y = float(self.get_param("~center_gaze_right_y", "0.4"))
+
+	self.max_no_face_staring_time_sec = float(self.get_param("~max_no_face_staring_time_sec", "2.0"))
+	# maximum seconds to wait for target to be reached before selecting a new target
+	self.max_target_time_sec = float(self.get_param("~max_target_time_sec", "10.0"))
+
+	#  target achieved threshold in radians (parameter specified in degrees)
+	self.pose_target_achieved_rad = (pi / 180.0) * float(self.get_param("~pose_target_achieved_deg", "2.0"))
+	# max time to hold the target pose
+	self.pose_target_hold_sec = float(self.get_param("~pose_target_hold_sec", "2.0"))
+	self.pose_target_achieved_time = 0  # the time the target was achieved - used to determine the hold time
+	self.tilt_joint = self.get_param("~tilt_joint", "torso_neck_joint")
+	self.pan_joint = self.get_param("~pan_joint", "upper_neck_head_joint")
+
+	self.pose_target = {self.pan_joint: 0.0, self.tilt_joint: 0.0}
+	self.pose = self.pose_target
 
 	left_image_sub = rospy.Subscriber(left_image_topic, sensor_msgs.msg.Image, self.on_left_image)
 	right_image_sub = rospy.Subscriber(right_image_topic, sensor_msgs.msg.Image, self.on_right_image)
@@ -746,23 +758,25 @@ class VisionNode(object):
 	    self.is_tracking_target = True
 	elif control.data == "stop_face_tracking":
 	    self.is_tracking_target = False
+	    self.look_still()
 
 
     def on_joints(self, joint_state):
-    	# TODO implement look around
 	pose = {}
 	for i in range(len(joint_state.name)):
 	    pose[joint_state.name[i]] = joint_state.position[i]
 	# assign to self.pose in a single statement to avoid multithreading issue
 	# (KeyError) with an incomplete dict
-	#self.pose = pose
-    	#self.last_joint_state = joint_state
-        #rospy.loginfo('Received joints message')
+	self.pose = pose
+    	self.last_joint_state = joint_state
 
 
     def on_target_face(self, target_face):
 	self.target_track_id = target_face.track_id
 
+
+    def on_recognized_face(self, recognized_face):
+    	self.recog_track_id = recognized_face.track_id
 
     def on_left_camera_info(self, camera_info):
     	self.left_camera_info = camera_info
@@ -816,13 +830,48 @@ class VisionNode(object):
 			self.publish_eye_alignment()
 			# stare at target face
 			if self.is_tracking_target:
+			    # TODO track face by recognition degree
+			    #   - TargetFace, if any
 			    track = self.vision.get_tracked_face(self.target_track_id)
 			    if track:
+			    	#rospy.loginfo("Tracking target " + str(track.id))
 				self.look_at_target(track, stereo_frame)
 			    else:
-			    	self.look_around()
-			else:
-			    self.look_still()
+				#   - else, RecognizedFace, if any
+			    	track = self.vision.get_tracked_face(self.recog_track_id)
+				if track:
+				    #rospy.loginfo("Tracking recognized " + str(track.id))
+				    self.look_at_target(track, stereo_frame)
+				else:
+				    #   - else, matched faces, if any
+				    if len(self.vision.matched_faces) > 0:
+				    	track = self.vision.get_tracked_face(self.vision.matched_faces[0][0].track_id)
+				    else:
+				    	track = None
+				    if track:
+					#rospy.loginfo("Tracking matched " + str(track.id))
+					self.look_at_target(track, stereo_frame)
+				    else:
+					#   - else, left detected faces, if any
+					if len(self.vision.left_detected_faces) > 0:
+					    track = self.vision.get_tracked_face(self.vision.left_detected_faces[0].track_id)
+					else:
+					    track = None
+					if track:
+					    #rospy.loginfo("Tracking left " + str(track.id))
+					    self.look_at_target(track, stereo_frame)
+					else:
+					    #   - else, right detected faces, if any
+					    if len(self.vision.right_detected_faces) > 0:
+						track = self.vision.get_tracked_face(self.vision.right_detected_faces[0].track_id)
+					    else:
+						track = None
+					    if track:
+						#rospy.loginfo("Tracking right " + str(track.id))
+						self.look_at_target(track, stereo_frame)
+					    else:
+						#   - else, look around
+						self.look_around()
 		else:
 		    # TODO handle case of one eye closed
 		    pass
@@ -962,6 +1011,14 @@ class VisionNode(object):
     	if len(target_track.right_faces) > 0:
 	    right_face = target_track.right_faces[-1]
 	
+	gaze_file = "gaze.txt"
+	if os.path.exists(gaze_file):
+	    with open(gaze_file, "rb") as f:
+	       lines = f.readlines()
+	    self.center_gaze_left_x, self.center_gaze_left_y = map(float, lines[0].split())
+	    self.center_gaze_right_x, self.center_gaze_right_y = map(float, lines[1].split())
+	    rospy.loginfo("gaze parameters %f, %f, %f, %f", self.center_gaze_left_x, self.center_gaze_left_y, self.center_gaze_right_x, self.center_gaze_right_y)
+
 	if left_face:
 	    f = left_face
 	    center_gaze_x = self.center_gaze_left_x
@@ -975,22 +1032,92 @@ class VisionNode(object):
 	else:
 	    return  # nothing to track
 
-	x = f.x
-	y = f.y
-	w = f.w
-	h = f.h
+	if time.time() - f.ts < 0.1:
+	    x = f.x
+	    y = f.y
+	    w = f.w
+	    h = f.h
 
-	iw, ih = color_image.shape[1::-1] # shape is h, w, d; reverse (h, w)->(w, h)
-	fx, fy = (x + w/2, y + h/2); # center of face rectangle
-	jx = self.gain * (iw * center_gaze_x - fx) / iw
-	jy = self.gain * (ih * center_gaze_y - fy) / ih
+	    iw, ih = color_image.shape[1::-1] # shape is h, w, d; reverse (h, w)->(w, h)
+	    fx, fy = (x + w/2, y + h/2); # center of face rectangle
+	    jx = self.gain * (iw * center_gaze_x - fx) / iw
+	    jy = self.gain * (ih * center_gaze_y - fy) / ih
 
-	self.joy_pub.publish(self.new_joy_message(jx, jy))
+	    self.joy_pub.publish(self.new_joy_message(jx, jy))
+	else:
+	    # only follow if face is very recently seen
+	    self.look_still()
 
 
     def look_around(self):
-    	# TODO implement this
-	self.look_still()  # temporary
+    	'''
+	Cause the robot to look around, rather than remaining stuck in a static pose.
+
+	To do this, select a target pose.
+	Determine the direction vector from the current pose to the target pose and send a joystick
+	message to move the head in the desired direction.
+	If sufficient time has passed since the selection of the previous target pose, or the
+	current pose is near enough the target and the target pose hold time has elapsed, then
+	select a new target pose and repeat.
+	'''
+	# check if we have spent enough time on this target pose
+	now = time.time()
+	if now - self.look_straight_target_selected_time >= self.max_target_time_sec:
+	    #rospy.loginfo('Timed out attempting target pose')
+	    self.select_look_around_target()
+	# check if the target pose has been held for sufficient time
+	elif self.pose_target_achieved_time > 0 and now - self.pose_target_achieved_time >= self.pose_target_hold_sec:
+	    #rospy.loginfo('Target pose held until ' + str(now))
+	    self.select_look_around_target()
+	    self.pose_target_achieved_time = 0
+	# check if the target pose has been achieved, and store the time
+	elif self.max_pose_deviation_from_target_rad() <= self.pose_target_achieved_rad:
+	    if self.pose_target_achieved_time == 0:
+		#rospy.loginfo('Target pose achieved at ' + str(now))
+		self.pose_target_achieved_time = now
+	
+	# calculate the direction to the target pose and send a joystick message
+	iw, ih = pi, pi   # no particular meaning to these, but they work empirically
+	fx, fy = self.pose[self.pan_joint], self.pose[self.tilt_joint]
+	jx = self.gain * (iw * self.pose_target[self.pan_joint] - fx) / iw
+	jy = 3 * self.gain * (ih * self.pose_target[self.tilt_joint] - fy) / ih
+	#rospy.loginfo("look_around " + str(jx) + ", " + str(jy) + ", pose=" + str(self.pose))
+	self.joy_pub.publish(self.new_joy_message(jx, jy))
+
+
+    def select_look_around_target(self):
+   	# select new random target from a 2D normal distribution centered at (0,0)
+	# covariance selected to keep pan joint in [-0.15, 0.15] and tilt joint in [-0.05, 0.05]
+	# which were determined empirically to be satisfactory values
+	# TODO make these values part of the robot instance configuration
+	# 3 stdev
+	# 0.0025 = (0.15 / 3) ** 2
+	# 0.000256 = (0.048 / 3) ** 2
+	# 2 stdev
+	# 0.005625 = (0.15 / 2) ** 2
+	# 0.000625 = (0.05 / 2) ** 2
+	t = np.random.multivariate_normal([0, 0], [[0.005625, 0], [0, 0.000625]])
+	t[0] = min(max(t[0], -0.15), 0.15)
+	t[1] = min(max(t[1], -0.05), 0.05)
+	# TEMP read pose from file
+	#with open('target_pose.txt', 'r') as f:
+	#    lines = f.readlines()
+	#t = [float(v) for v in lines[0].split()]
+	self.pose_target = {self.pan_joint: t[0], self.tilt_joint: t[1]}
+        #rospy.loginfo('Target pose set to ' + str(self.pose_target))
+	self.look_straight_target_selected_time = time.time()
+
+
+    def max_pose_deviation_from_target_rad(self):
+    	'''
+	Calculate the maximum deviation between the target pose and the current pose in radians.
+	'''
+	if self.last_joint_state is None:
+	    return 0.0
+
+	pan_deviation = abs(self.pose_target[self.pan_joint] - self.pose[self.pan_joint])
+	tilt_deviation = abs(self.pose_target[self.pan_joint] - self.pose[self.tilt_joint])
+	return max(pan_deviation, tilt_deviation)
 
 
     def look_still(self):

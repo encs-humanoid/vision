@@ -223,8 +223,6 @@ class AnnotateFaceNode(object):
 
 	    # TODO correlate the timestamps of messages to the image timestamp
 
-	    # TODO filter by frame id e.g., recognized_face.header.frame_id
-
 	    # annotate the image
 
 	    # highlight eye overlaps in gray
@@ -281,34 +279,32 @@ class AnnotateFaceNode(object):
 			#face_pred = self.oc.pull('face_pred')
 			#cv2.putText(color_image, str(face_pred[0]), (d.x, d.y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, Color.WHITE)
 			#print str(face_pred) + " at " + str(d.x) + ", " + str(d.y)
-		# TODO keep only the latest face for each track
+		# keep only the latest face for each track
 		self.detected_faces = [f for f in self.detected_faces if now_sec - f.header.stamp.to_sec() < 0.1]
 
 	    # highlight unrecognized face in red
-	    # TODO enable this again
-	    if False and len(self.unrecognized_faces) > 0:
+	    if len(self.unrecognized_faces) > 0:
 	    	for u in self.unrecognized_faces:
 		    cv2.rectangle(color_image, (u.x, u.y), (u.x + u.w, u.y + u.h), Color.RED, 2)
 		self.unrecognized_faces = [f for f in self.unrecognized_faces if now_sec - f.header.stamp.to_sec() < 0.1]
 
 	    # highlight recognized face in green
-	    # TODO enable this again
-	    if False and len(self.recognized_faces) > 0:
+	    if len(self.recognized_faces) > 0:
 	    	for r in self.recognized_faces:
 		    cv2.rectangle(color_image, (r.x, r.y), (r.x + r.w, r.y + r.h), Color.GREEN, 2)
 		# discard stored recognized faces which are too old
 		self.recognized_faces = [f for f in self.recognized_faces if now_sec - f.header.stamp.to_sec() < 0.5]
 
 	    # highlight target face in yellow
-	    # TODO enable this again
 	    if len(self.target_faces) > 0:
 	    	for t in self.target_faces:
 		    if t.id == t.recog_id:
-			cv2.rectangle(color_image, (t.x, t.y), (t.x + t.w, t.y + t.h), Color.YELLOW, 2)
-			cv2.putText(color_image, str(t.name) + "-" + str(t.id), (t.x + 2, t.y + 12), cv2.FONT_HERSHEY_SIMPLEX, 0.5, Color.WHITE)
+			color = Color.YELLOW
+			#cv2.putText(color_image, str(t.name) + "-" + str(t.id), (t.x + 2, t.y + 12), cv2.FONT_HERSHEY_SIMPLEX, 0.5, Color.WHITE)
 		    else:
-			cv2.rectangle(color_image, (t.x, t.y), (t.x + t.w, t.y + t.h), Color.GREEN, 2)
-			cv2.putText(color_image, str(t.recog_name) + "-" + str(t.recog_id), (t.x + 2, t.y + 12), cv2.FONT_HERSHEY_SIMPLEX, 0.5, Color.GREEN)
+			color = Color.GREEN
+			#cv2.putText(color_image, str(t.recog_name) + "-" + str(t.recog_id), (t.x + 2, t.y + 12), cv2.FONT_HERSHEY_SIMPLEX, 0.5, Color.GREEN)
+		    cv2.rectangle(color_image, (t.x, t.y), (t.x + t.w, t.y + t.h), color, 2)
 		self.target_faces = [f for f in self.target_faces if now_sec - f.header.stamp.to_sec() < 0.5]
 
 	    # highlight chessboard points in yellow
