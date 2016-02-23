@@ -86,11 +86,12 @@ class AnnotateFaceNode(object):
 	self.bridge = CvBridge()
 	#self.oc = oct2py.Oct2Py()
 	self.last_ros_image = None
-	self.target_faces = []
-	self.recognized_faces = []
-	self.unrecognized_faces = []
-	self.detected_faces = []
-	self.faces = []
+	self.target_faces = {}
+	self.target_track_id = -1
+	self.recognized_faces = {}
+	self.unrecognized_faces = {}
+	self.detected_faces = {}  # key=track_id, value=DetectedFace msg
+	self.faces = {}
 	self.last_chessboard = None
 	self.last_chessboard_ts = time.time()
 	self.eye_alignment = None
@@ -144,28 +145,28 @@ class AnnotateFaceNode(object):
 
     def on_target_face(self, target_face):
     	if target_face.header.frame_id == self.frame_id:
-	    self.target_faces.append(target_face)
+	    self.target_faces[target_face.track_id] = target_face
 
 
     def on_recognized_face(self, recognized_face):
     	if recognized_face.header.frame_id == self.frame_id:
-	    self.recognized_faces.append(recognized_face)
+	    self.recognized_faces[recognized_face.track_id] = recognized_face
 
 
     def on_unrecognized_face(self, unrecognized_face):
     	if unrecognized_face.header.frame_id == self.frame_id:
-	    self.unrecognized_faces.append(unrecognized_face)
+	    self.unrecognized_faces[unrecognized_face.track_id] = unrecognized_face
 
 
     def on_detected_face(self, detected_face):
 	if detected_face.header.frame_id == self.frame_id:
-	    self.detected_faces.append(detected_face)
+	    self.detected_faces[detected_face.track_id] = detected_face
 
 
     def on_face(self, face):
     	# store all the faces matching the node's frame_id
 	if face.header.frame_id == self.frame_id:
-	    self.faces.append(face)
+	    self.faces[face.track_id] = face
 
 
     def on_chessboard(self, chessboard):
@@ -243,8 +244,11 @@ class AnnotateFaceNode(object):
 
 	    # highlight raw faces in black
 	    if len(self.faces) > 0:
-	    	for f in self.faces:
-		    cv2.rectangle(color_image, (f.x, f.y), (f.x + f.w, f.y + f.h), Color.BLACK, 2)
+	    	for f in self.faces.values():
+		    color = Color.BLACK
+		    if f.track_id == self.target_track_id:
+		    	color = Color.YELLOW
+		    cv2.rectangle(color_image, (f.x, f.y), (f.x + f.w, f.y + f.h), color, 2)
 		    color = tuple(f.track_color)
 		    cv2.putText(color_image, str(f.track_id), (int(f.x + 0.5 * f.w - 7), int(f.y + 0.5 * f.h) + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color)
 		    if f.track_id in self.names:
@@ -255,14 +259,16 @@ class AnnotateFaceNode(object):
 			    conf = names.confs[0]
 			    cv2.putText(color_image, str(name) + "-" + str(conf), (f.x + 2, f.y + 12), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color)
 		# discard stored faces which are too old
-		self.faces = [f for f in self.faces if now_sec - f.header.stamp.to_sec() < 0.1]
+		self.purge_faces(self.faces, 0.1)
 
 	    # highlight detected face in blue or random color if tracked
 	    if len(self.detected_faces) > 0:
 		#rospy.loginfo('%d detected faces for frame %s', len(self.detected_faces), self.frame_id)
-	    	for d in self.detected_faces:
+	    	for d in self.detected_faces.values():
 		    #color = self.get_track_color(d.track_id)
 		    color = tuple(d.track_color)
+		    if d.track_id == self.target_track_id:
+		    	color = Color.YELLOW
 		    cv2.rectangle(color_image, (d.x, d.y), (d.x + d.w, d.y + d.h), color, 2)
 		    # draw eyes
 		    eyes = [(d.left_eye_x, d.left_eye_y, d.left_eye_w, d.left_eye_h), (d.right_eye_x, d.right_eye_y, d.right_eye_w, d.right_eye_h)]
@@ -280,32 +286,33 @@ class AnnotateFaceNode(object):
 			#cv2.putText(color_image, str(face_pred[0]), (d.x, d.y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, Color.WHITE)
 			#print str(face_pred) + " at " + str(d.x) + ", " + str(d.y)
 		# keep only the latest face for each track
-		self.detected_faces = [f for f in self.detected_faces if now_sec - f.header.stamp.to_sec() < 0.1]
+		self.purge_faces(self.detected_faces)
 
 	    # highlight unrecognized face in red
 	    if len(self.unrecognized_faces) > 0:
-	    	for u in self.unrecognized_faces:
+	    	for u in self.unrecognized_faces.values():
 		    cv2.rectangle(color_image, (u.x, u.y), (u.x + u.w, u.y + u.h), Color.RED, 2)
-		self.unrecognized_faces = [f for f in self.unrecognized_faces if now_sec - f.header.stamp.to_sec() < 0.1]
+		self.purge_faces(self.unrecognized_faces)
 
 	    # highlight recognized face in green
 	    if len(self.recognized_faces) > 0:
-	    	for r in self.recognized_faces:
+	    	for r in self.recognized_faces.values():
 		    cv2.rectangle(color_image, (r.x, r.y), (r.x + r.w, r.y + r.h), Color.GREEN, 2)
 		# discard stored recognized faces which are too old
-		self.recognized_faces = [f for f in self.recognized_faces if now_sec - f.header.stamp.to_sec() < 0.5]
+		self.purge_faces(self.recognized_faces)
 
 	    # highlight target face in yellow
 	    if len(self.target_faces) > 0:
-	    	for t in self.target_faces:
+	    	for t in self.target_faces.values():
 		    if t.id == t.recog_id:
 			color = Color.YELLOW
+			self.target_track_id = t.track_id
 			#cv2.putText(color_image, str(t.name) + "-" + str(t.id), (t.x + 2, t.y + 12), cv2.FONT_HERSHEY_SIMPLEX, 0.5, Color.WHITE)
 		    else:
 			color = Color.GREEN
 			#cv2.putText(color_image, str(t.recog_name) + "-" + str(t.recog_id), (t.x + 2, t.y + 12), cv2.FONT_HERSHEY_SIMPLEX, 0.5, Color.GREEN)
 		    cv2.rectangle(color_image, (t.x, t.y), (t.x + t.w, t.y + t.h), color, 2)
-		self.target_faces = [f for f in self.target_faces if now_sec - f.header.stamp.to_sec() < 0.5]
+		self.purge_faces(self.target_faces)
 
 	    # highlight chessboard points in yellow
 	    if self.last_chessboard:
@@ -321,19 +328,11 @@ class AnnotateFaceNode(object):
 	    print e
 
 
-#    def get_track_color(self, track):
-#	color = Color.BLUE
-#	if track > 0:
-#	    if track in self.colors:
-#		color = self.colors[track]
-#	    else:
-#		# select a random color for the track
-#		color = tuple(np.random.randint(0, 255, 3).tolist())
-#		self.colors[track] = color
-#		for t in self.colors.keys():  # remove expired colors
-#		    if t < track - 10:  # only keep the last 10 track colors
-#			del self.colors[t]
-#	return color
+    def purge_faces(self, faces, max_duration_sec=0.5):
+	now_sec = time.time()
+	for t, f in faces.items():
+	    if now_sec - f.header.stamp.to_sec() > max_duration_sec or f.header.stamp.to_sec() > now_sec:  # too old or in future
+		del faces[t]
 
 
 if __name__ == '__main__':
