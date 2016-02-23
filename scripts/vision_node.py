@@ -666,6 +666,7 @@ class VisionNode(object):
 	self.target_track_id = 0
     	self.recog_track_id = 0
 	self.look_straight_target_selected_time = 0
+	self.last_joint_state = None
 
 	myargs = rospy.myargv(sys.argv) # process ROS args and return the rest
 
