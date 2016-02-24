@@ -1033,7 +1033,7 @@ class VisionNode(object):
 	else:
 	    return  # nothing to track
 
-	if time.time() - f.ts < 0.1:
+	if time.time() - f.ts < 0.5:
 	    x = f.x
 	    y = f.y
 	    w = f.w
@@ -1044,9 +1044,11 @@ class VisionNode(object):
 	    jx = self.gain * (iw * center_gaze_x - fx) / iw
 	    jy = self.gain * (ih * center_gaze_y - fy) / ih
 
+	    #rospy.loginfo("tracking direction %f, %f", jx, jy)
 	    self.joy_pub.publish(self.new_joy_message(jx, jy))
 	else:
 	    # only follow if face is very recently seen
+	    #rospy.loginfo("too old to track")
 	    self.look_still()
 
 
