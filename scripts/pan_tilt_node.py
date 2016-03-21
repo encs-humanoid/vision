@@ -4,21 +4,36 @@
 # It publishes joint state messages.
 # =======================================================
 from __future__ import division
+import atexit
+from math import pi
 import rospy
 from sensor_msgs.msg import Joy
 from sensor_msgs.msg import JointState
 import time
 import threading
-from math import pi
 
 ##### pin assignments
 left_tilt_pin = 1
 right_tilt_pin = 2
 pan_pin = 0
 
-class PanTilt:
+
+class PanTiltConfig(object):
     def __init__(self):
+	self.pan_pin = 0
+	self.tilt_pin = 1
+	self.pan_left_limit = 90
+	self.pan_right_limit = 210
+	self.tilt_down_limit = 125
+	self.tilt_up_limit = 185
+	self.pan_center = 150
+	self.tilt_center = 155
+
+
+class PanTilt(object):
+    def __init__(self, config=PanTiltConfig()):
         try:
+	    self.config = config
             self.sb = open('/dev/servoblaster', 'w')
         except (IOError):
             print "*** ERROR ***"
@@ -26,27 +41,20 @@ class PanTilt:
             print "To start servod, run: sudo /etc/init.d/servoblaster.sh start"
             exit()
 
+
     def pwm(self, pin, angle):
         self.sb.write(str(pin) + '=' + str(int(angle)) + '\n')
         self.sb.flush()
 
+
     def go(self, pan_angle, tilt_angle):
-	self.pwm(left_tilt_pin, self.map_left_tilt_angle(tilt_angle))
-	self.pwm(right_tilt_pin, self.map_right_tilt_angle(tilt_angle))
-	self.pwm(pan_pin, self.map_pan_angle(pan_angle))
+	self.pwm(self.config.tilt_pin, map(tilt_angle, 0, 100, self.config.tilt_down_limit, self.config.tilt_up_limit))
+	self.pwm(self.config.pan_pin, map(pan_angle, 0, 100, self.config.pan_left_limit, self.config.pan_right_limit))
 
-    def map_left_tilt_angle(self, angle):
-	return map(angle, 0, 100, 130, 190)
-
-    def map_right_tilt_angle(self, angle):
-	return map(angle, 0, 100, 125, 185)
-	#return map(angle, 0, 100, 165, 105)
-
-    def map_pan_angle(self, angle):
-	return map(angle, 0, 100, 90, 210)
 
 def map(value, domainLow, domainHigh, rangeLow, rangeHigh):
     return ((value - domainLow) / (domainHigh - domainLow)) * (rangeHigh - rangeLow) + rangeLow
+
 
 # Receives joystick messages (subscribed to Joy topic)
 # then converts the joysick inputs into pipan movement commands
@@ -125,22 +133,53 @@ def callback(data):
     if (data.buttons[8] == 1): # SELECT button pressed
 	goCenter = True
 
-# Intializes everything
-def start():
-    global p, publisher
-    p = PanTilt()
-    t = threading.Thread(target=pan_tilt)
-    t.daemon = True
-    t.start()
-    # starts the node
-    rospy.init_node('pipan_node')
-    # publish joint states to sync with rviz virtual model
-    # the topic to publish to is defined in the source_list parameter
-    # as:  rosparam set source_list "['joints']"
-    publisher = rospy.Publisher("joints", JointState)
-    # subscribed to joystick inputs on topic "joy"
-    rospy.Subscriber("joy", Joy, callback)
-    rospy.spin()
+class PanTiltNode(object):
+    def __init__(self):
+	global p, publisher
+	rospy.init_node('pan_tilt_node')
+
+	config = PanTiltConfig()
+	config.pan_pin = int(self.get_param("pan_pin", "0"))
+	config.tilt_pin = int(self.get_param("tilt_pin", "1"))
+	config.pan_left_limit = int(self.get_param("pan_left_limit", "90"))
+	config.pan_right_limit = int(self.get_param("pan_right_limit", "210"))
+	config.tilt_down_limit = int(self.get_param("tilt_down_limit", "125"))
+	config.tilt_up_limit = int(self.get_param("tilt_up_limit", "185"))
+	config.pan_center = int(self.get_param("pan_center", "150"))
+	config.tilt_center = int(self.get_param("tilt_center", "155"))
+	p = PanTilt(config)
+
+	# publish joint states to sync with rviz virtual model
+	# the topic to publish to is defined in the source_list parameter
+	# as:  rosparam set source_list "['joints']"
+	publisher = rospy.Publisher("/joints", JointState)
+
+	# subscribed to joystick inputs on topic "joy"
+	rospy.Subscriber("/joy", Joy, callback)
+
+
+    def get_param(self, param_name, param_default):
+        value = rospy.get_param(param_name, param_default)
+        rospy.loginfo('Parameter %s has value %s', rospy.resolve_name(param_name), value)
+        return value
+
+
+    def run(self):
+	t = threading.Thread(target=pan_tilt)
+	t.daemon = True
+	t.start()
+	rospy.spin()
+
+
+    def on_exit(self):
+    	rospy.loginfo("Exiting.")
+
 
 if __name__ == '__main__':
-    start()
+    try:
+    	node = PanTiltNode()
+	atexit.register(node.on_exit)
+	node.run()
+    except rospy.ROSInterruptException:
+    	pass
+
