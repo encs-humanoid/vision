@@ -60,6 +60,7 @@ add_message_files(
   NamedFace.msg
   RecognizedFace.msg
   TargetFace.msg
+  I2CMove.msg
 #   Message2.msg
 )
 
