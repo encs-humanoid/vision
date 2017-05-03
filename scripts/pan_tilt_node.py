@@ -11,15 +11,11 @@ from sensor_msgs.msg import Joy
 from sensor_msgs.msg import JointState
 import time
 import threading
-
-##### pin assignments
-left_tilt_pin = 1
-right_tilt_pin = 2
-pan_pin = 0
-
+from Adafruit_PWM_Servo_Driver import PWM
 
 class PanTiltConfig(object):
     def __init__(self):
+	self.i2c_mode = 1
 	self.pan_pin = 0
 	self.tilt_pin = 1
 	self.pan_left_limit = 90
@@ -34,18 +30,32 @@ class PanTilt(object):
     def __init__(self, config=PanTiltConfig()):
         try:
 	    self.config = config
-            self.sb = open('/dev/servoblaster', 'w')
+	    if (self.config.i2c_mode == 0):
+	       self.sb = open('/dev/servoblaster', 'w')
+	    else:
+	       self.servo16 = PWM(0x40)
+
         except (IOError):
             print "*** ERROR ***"
-            print "Unable to open the device, check that servod is running"
-            print "To start servod, run: sudo /etc/init.d/servoblaster.sh start"
+            print "Unable to communicate to the servo"
             exit()
 
 
-    def pwm(self, pin, angle):
-        self.sb.write(str(pin) + '=' + str(int(angle)) + '\n')
-        self.sb.flush()
-
+    # Pulse width is specified in 0.01 millisec values 
+    #   ie: a pulse value of 150 represents 150*.01 = 1.5 msec, which is center
+    def pwm(self, channel, pulse):
+	 if (self.config.i2c_mode == 0):
+	    self.sb.write(str(channel) + '=' + str(int(pulse)) + '\n')
+	    self.sb.flush()
+	 else:
+	    print "pwm(chan=", channel, ", pulse=", pulse
+	    pulseLength = 1000000                   # 1,000,000 us per second
+	    pulseLength /= 60                       # 60 Hz
+	    pulseLength /= 4096                     # 12 bits of resolution
+	    pulse *= 10                             # convert value to usec
+	    pulse /= pulseLength                    # calculate channel pulse length
+	    print "servo16(chan=", channel, ", pulse=", pulse
+	    self.servo16.setPWM(channel, 0, int(pulse))
 
     def go(self, pan_angle, tilt_angle):
 	self.pwm(self.config.tilt_pin, map(tilt_angle, 0, 100, self.config.tilt_down_limit, self.config.tilt_up_limit))
@@ -107,7 +117,7 @@ def publish_joint_state():
     pan_angle = (x0 - x) * pi / 180.0
     tilt_angle = 0.4618 * (y - y0) * pi / 180.0 # TODO correct this for the geometry of the robot
 
-    print "x=" + str(x) + ", y=" + str(y) + ", pan=" + str(x-x0) + ", tilt=" + str(y-y0)
+    #print "x=" + str(x) + ", y=" + str(y) + ", pan=" + str(x-x0) + ", tilt=" + str(y-y0)
     #print "pan_angle=" + str(pan_angle) + ", tilt_angle=" + str(tilt_angle)
 
     joint_state = JointState()
@@ -139,6 +149,10 @@ class PanTiltNode(object):
 	rospy.init_node('pan_tilt_node')
 
 	config = PanTiltConfig()
+
+	# I2C Mode: 0 - RPI GPI, 1 - Adafruit 16-channel I2C controller
+	config.i2c_mode = int(self.get_param("i2c_mode", "1"))
+
 	config.pan_pin = int(self.get_param("pan_pin", "0"))
 	config.tilt_pin = int(self.get_param("tilt_pin", "1"))
 	config.pan_left_limit = int(self.get_param("pan_left_limit", "90"))
