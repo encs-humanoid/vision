@@ -41,22 +41,22 @@ def setServoPulsePWM(p, channel, pulse):
 def go(board, channel, pulse):
     setServoPulsePWM(pwms[board], channel, pulse)
 
-eye_data = None
+joint_data = None
 
 def reload():
-    global eye_data
-    with open("eyes.txt", "r") as f:
-	eye_data = json.load(f)
+    global joint_data
+    with open("joints.txt", "r") as f:
+	joint_data = json.load(f)
 
 def move(name, part, fraction):
-    global eye_data
-    if eye_data is None:
+    global joint_data
+    if joint_data is None:
     	reload()
     if fraction > 1:
     	fraction = 1
     elif fraction < 0:
     	fraction = 0
-    obj = eye_data[name][part]
+    obj = joint_data[name][part]
     p = pwms[obj["board"]]
     channel = obj["channel"]
     if "cntr" in obj:

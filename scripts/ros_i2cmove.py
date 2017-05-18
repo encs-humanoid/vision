@@ -34,7 +34,8 @@ class I2CMoveNode(object):
 	self.currentHZ = 0.0
 
 	rospy.Subscriber("/i2cmove", I2CMove, self.on_move)
-	rospy.Subscriber("/joy", Joy, self.on_joy)
+	# remove joy message processing in favor of joy_control node doing it
+	#rospy.Subscriber("/joy", Joy, self.on_joy)
 	rospy.Subscriber("/control", std_msgs.msg.String, self.on_control)
 
     def on_move(self, msg):
