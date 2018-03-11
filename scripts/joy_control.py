@@ -7,6 +7,7 @@ import atexit
 import i2cMessage
 from i2cMessage import move
 import json
+import os.path
 from math import pi
 import rospy
 from sensor_msgs.msg  import Joy
@@ -22,6 +23,7 @@ from blink_left import blinkLeft
 from blink_right import blinkRight
 from reset_eyes import reseteye
 from random import randint
+from eye_lid import eye_lid
 
 class JoyControl(object):
     def __init__(self):
@@ -45,7 +47,7 @@ class JoyControl(object):
 
 
     def init_controls(self):
-	with open("control_map.txt", "r") as f:
+	with open(os.path.expanduser("~/control_map.json"), "r") as f:
 	    self.controls = json.load(f)
 	
 
@@ -66,11 +68,20 @@ class JoyControl(object):
 			    axis_num = abs(condition["axis"]) - 1
 			    axis_mul = -1 if condition["axis"] < 0 else 1
 			if axis_num < 99 and (button_num == 99 or msg.buttons[button_num] == button_val):
-			    control["joy"] = axis_mul * msg.axes[axis_num]
+			    # make sure the axis value is valid
+			    # an invalid value can be used to indicate that no value is provided
+			    # this is used to avoid different Joy message streams conflicting
+			    if msg.axes[axis_num] >= -1.0 and msg.axes[axis_num] <= 1.0:
+				control["joy"] = axis_mul * msg.axes[axis_num]
 
 	# process special behaviors for button presses
+	a = msg.axes
+	if a[2] != 1 or a[5] != 1:  # variable button - front left/right bottom button
+	   eye_lid(a[2], "right_eye")
+           eye_lid(a[5], "left_eye")
+
 	b = msg.buttons
-	if b[0] == 1 and b[1] == 1:  # Triangle and Circle
+	if b[0] == 1 and b[1] == 1:  # Red and Green Buttons
 	    glaring()
 	    time.sleep(1)
 	    reseteye()
@@ -78,7 +89,7 @@ class JoyControl(object):
 	    glaring()
 	    time.sleep(3)
 	    blink(1)
-	if b[0] == 1:  # Triangle button
+	if b[0] == 1:  # Green Button
 	    blink(1)
 	if b[4] == 1:
 	    blinkLeft(1)
@@ -92,17 +103,23 @@ class JoyControl(object):
 		for part in self.controls[name].keys():
 		    control = self.controls[name][part]
 		    if "joy" in control:
-		    	if "speed" in control:
-			    speed = control["speed"]
-			else:
-			    speed = 0.05
-			delta = control["joy"] * speed
-			if (delta != 0):
-			    if "pos" not in control:
-			    	control["pos"] = 0.5
-			    control["pos"] = max(0.0, min(control["pos"] + delta, 1.0))
-			    move(name, part, control["pos"])
-	    
+		    	if "type" not in control or control["type"] == "follow":
+			#TODO: Make a separate thing for follow ;)
+			    if "speed" in control:
+				speed = control["speed"]
+			    else:
+				speed = 0.05
+			    delta = control["joy"] * speed
+			    if (delta != 0):
+				if "pos" not in control:
+				    control["pos"] = 0.5
+				control["pos"] = max(0.0, min(control["pos"] + delta, 1.0))
+				move(name, part, control["pos"])
+			elif control["type"] == "rubber":
+			    bounce = control["joy"]
+			    bounce = (bounce * 0.5) + 0.5
+			    move(name, part, bounce)
+
 	    self.publish_joint_state()
 	    time.sleep(0.05)
 
@@ -162,7 +179,7 @@ class BlinkThread(threading.Thread):
     def run(self):
         while True:
 	    time.sleep(randint(12, 15))
-	    blink(1)
+	    #blink(1)
 
 
 if __name__ == '__main__':

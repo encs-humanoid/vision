@@ -3,6 +3,7 @@
 from __future__ import division
 from Adafruit_PWM_Servo_Driver import PWM
 import json
+import os.path
 import time
 
 # ===========================================================================
@@ -45,7 +46,7 @@ joint_data = None
 
 def reload():
     global joint_data
-    with open("joints.txt", "r") as f:
+    with open(os.path.expanduser("~/joints.json"), "r") as f:
 	joint_data = json.load(f)
 
 def move(name, part, fraction):

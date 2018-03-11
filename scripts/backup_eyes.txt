@@ -13,7 +13,7 @@
     },
     "right_arm": {
     	"piv": { "board": 64, "channel": 14, "llim": 139, "ulim": 251 },
-    	"rot": { "board": 64, "channel": 2, "llim": 125, "ulim": 210 },
+    	"rot": { "board": 64, "channel": 13, "llim": 125, "ulim": 210 },
     	"flex": { "board": 64, "channel": 3, "llim": 125, "ulim": 210 },
 	"lift": { "board": 64, "channel": 15, "llim": 167, "ulim": 216 }
     },
