@@ -71,12 +71,12 @@ class JoyControl(object):
 			    # make sure the axis value is valid
 			    # an invalid value can be used to indicate that no value is provided
 			    # this is used to avoid different Joy message streams conflicting
-			    if msg.axes[axis_num] >= -1.0 and msg.axes[axis_num] <= 1.0:
+			    if axis_num < len(msg.axes) and msg.axes[axis_num] >= -1.0 and msg.axes[axis_num] <= 1.0:
 				control["joy"] = axis_mul * msg.axes[axis_num]
 
 	# process special behaviors for button presses
 	a = msg.axes
-	if a[2] != 1 or a[5] != 1:  # variable button - front left/right bottom button
+	if a[2] <= 1 or a[5] <= 1:  # variable button - front left/right bottom button
 	   eye_lid(a[2], "right_eye")
            eye_lid(a[5], "left_eye")
 
@@ -103,8 +103,11 @@ class JoyControl(object):
 		for part in self.controls[name].keys():
 		    control = self.controls[name][part]
 		    if "joy" in control:
-		    	if "type" not in control or control["type"] == "follow":
-			#TODO: Make a separate thing for follow ;)
+			if "type" in control and control["type"] == "rubber":
+			    bounce = control["joy"]
+			    bounce = (bounce * 0.5) + 0.5
+			    move(name, part, bounce)
+		    	else:
 			    if "speed" in control:
 				speed = control["speed"]
 			    else:
@@ -115,10 +118,27 @@ class JoyControl(object):
 				    control["pos"] = 0.5
 				control["pos"] = max(0.0, min(control["pos"] + delta, 1.0))
 				move(name, part, control["pos"])
-			elif control["type"] == "rubber":
-			    bounce = control["joy"]
-			    bounce = (bounce * 0.5) + 0.5
-			    move(name, part, bounce)
+			    elif "type" in control and control["type"] == "follow":
+				# track time since last change in followed control
+				follow = control["follow"]
+				if "lastChange" not in follow:
+				    follow["lastChange"] = time.time()
+				else:
+				    if "speed" in control:
+					speed = control["speed"]
+				    else:
+					speed = 0.05
+				    # 0 at start; 1 if >= delay
+				    timeFactor = min(1.0, (time.time() - follow["lastChange"]) / follow["delaySec"])
+				    delta = self.controls[follow["name"]][follow["part"]]["joy"] * speed * timeFactor**2
+				    if (delta != 0):
+					if "pos" not in control:
+					    control["pos"] = 0.5
+					control["pos"] = max(0.0, min(control["pos"] + delta, 1.0))
+					rospy.loginfo('timeFactor=%g, delta=%g', timeFactor, delta)
+					move(name, part, control["pos"])
+				    else:
+					del follow["lastChange"]
 
 	    self.publish_joint_state()
 	    time.sleep(0.05)
@@ -179,7 +199,7 @@ class BlinkThread(threading.Thread):
     def run(self):
         while True:
 	    time.sleep(randint(12, 15))
-	    #blink(1)
+	    blink(1)
 
 
 if __name__ == '__main__':

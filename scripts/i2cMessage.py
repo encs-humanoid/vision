@@ -32,5 +32,5 @@ def move(name, part, fraction):
 	i2cthread.start()
 	time.sleep(3)  # wait for node to get connected
     i2cthread.publish(name, part, fraction)
-    rospy.loginfo("published i2c move for " + name + ", " + part + ", " + str(fraction))
+    #rospy.loginfo("published i2c move for " + name + ", " + part + ", " + str(fraction))
 
